@@ -1,0 +1,21 @@
+apiVersion: apps.ops.dev/v1alpha1
+kind: PodSleuth
+metadata:
+  name: podsleuth-sample
+spec:
+  # Optional: Reconcile interval (default: 5 minutes)
+  # If not specified, defaults to 5 minutes
+  reconcileInterval: 5m
+  
+  # Optional: Pod label selector to filter pods across all namespaces
+  # If not specified, monitors all pods in all namespaces
+  podLabelSelector:
+    matchLabels:
+      app: myapp
+    # or use matchExpressions for more complex filtering
+    # matchExpressions:
+    #   - key: environment
+    #     operator: In
+    #     values:
+    #     - production
+    #     - staging

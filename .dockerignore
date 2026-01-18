@@ -1,0 +1,11 @@
+# More info: https://docs.docker.com/engine/reference/builder/#dockerignore-file
+# Ignore test files and unnecessary files
+**/*_test.go
+.git
+.github
+.gitignore
+.dockerignore
+bin/
+test/
+*.md
+.devcontainer

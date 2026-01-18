@@ -1,0 +1,20 @@
+apiVersion: apps.ops.dev/v1alpha1
+kind: PodSleuth
+metadata:
+  name: podsleuth-test
+spec:
+  # Reconcile interval (optional, default: 5 minutes)
+  reconcileInterval: 5m
+  
+  # Pod label selector to filter test pods
+  # This will monitor all pods with environment=test label across all namespaces
+  podLabelSelector:
+    matchLabels:
+      environment: test
+    # You can also use matchExpressions for more complex filtering:
+    # matchExpressions:
+    #   - key: environment
+    #     operator: In
+    #     values:
+    #     - test
+    #     - staging

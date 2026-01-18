@@ -1,0 +1,125 @@
+---
+# Deployments
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: web-frontend
+  namespace: default
+  labels:
+    app: webapp
+    tier: frontend
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app: webapp
+      tier: frontend
+  template:
+    metadata:
+      labels:
+        app: webapp
+        tier: frontend
+    spec:
+      containers:
+      - name: frontend
+        image: nginx:latest
+        ports:
+        - containerPort: 80
+        env:
+        - name: API_URL
+          value: "http://web-backend:8080"
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: web-backend
+  namespace: default
+  labels:
+    app: webapp
+    tier: backend
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: webapp
+      tier: backend
+  template:
+    metadata:
+      labels:
+        app: webapp
+        tier: backend
+    spec:
+      containers:
+      - name: backend
+        image: nginx:latest
+        ports:
+        - containerPort: 8080
+---
+# DeploymentGuards
+apiVersion: infra.baturorkun.com/v1alpha1
+kind: DeploymentGuard
+metadata:
+  name: frontend-guard
+  namespace: default
+  labels:
+    app: webapp
+    tier: frontend
+spec:
+  deploymentName: web-frontend
+---
+apiVersion: infra.baturorkun.com/v1alpha1
+kind: DeploymentGuard
+metadata:
+  name: backend-guard
+  namespace: default
+  labels:
+    app: webapp
+    tier: backend
+spec:
+  deploymentName: web-backend
+---
+# FeatureFlags
+apiVersion: infra.baturorkun.com/v1alpha1
+kind: FeatureFlag
+metadata:
+  name: new-ui-feature
+  namespace: default
+  labels:
+    app: webapp
+    category: ui
+spec:
+  enabled: true
+---
+apiVersion: infra.baturorkun.com/v1alpha1
+kind: FeatureFlag
+metadata:
+  name: api-v2-feature
+  namespace: default
+  labels:
+    app: webapp
+    category: backend
+spec:
+  enabled: false
+---
+apiVersion: infra.baturorkun.com/v1alpha1
+kind: FeatureFlag
+metadata:
+  name: analytics-feature
+  namespace: default
+  labels:
+    app: webapp
+    category: monitoring
+spec:
+  enabled: true
+---
+apiVersion: infra.baturorkun.com/v1alpha1
+kind: FeatureFlag
+metadata:
+  name: debug-mode
+  namespace: default
+  labels:
+    app: webapp
+    category: development
+spec:
+  enabled: false
+

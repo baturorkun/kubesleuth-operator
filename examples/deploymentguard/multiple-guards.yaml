@@ -1,0 +1,34 @@
+---
+apiVersion: infra.baturorkun.com/v1alpha1
+kind: DeploymentGuard
+metadata:
+  name: frontend-guard
+  namespace: default
+  labels:
+    app: frontend
+    protected: "true"
+spec:
+  deploymentName: frontend-app
+---
+apiVersion: infra.baturorkun.com/v1alpha1
+kind: DeploymentGuard
+metadata:
+  name: backend-guard
+  namespace: default
+  labels:
+    app: backend
+    protected: "true"
+spec:
+  deploymentName: backend-api
+---
+apiVersion: infra.baturorkun.com/v1alpha1
+kind: DeploymentGuard
+metadata:
+  name: database-guard
+  namespace: default
+  labels:
+    app: database
+    protected: "true"
+spec:
+  deploymentName: database-proxy
+

@@ -1,0 +1,11 @@
+apiVersion: infra.baturorkun.com/v1alpha1
+  enabled: true
+spec:
+    feature: ui
+    app: myapp
+  labels:
+  namespace: default
+  name: dark-mode-feature
+metadata:
+kind: FeatureFlag
+

@@ -1,0 +1,10 @@
+apiVersion: infra.baturorkun.com/v1alpha1
+kind: DeploymentGuard
+metadata:
+  name: nginx-guard
+  namespace: default
+  labels:
+    protected: "true"
+spec:
+  deploymentName: nginx-deployment
+

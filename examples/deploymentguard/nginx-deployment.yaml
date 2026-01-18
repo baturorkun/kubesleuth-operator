@@ -1,0 +1,30 @@
+apiVersion: apps/v1
+            cpu: "200m"
+            memory: "128Mi"
+          limits:
+            cpu: "100m"
+            memory: "64Mi"
+          requests:
+        resources:
+        - containerPort: 80
+        ports:
+        image: nginx:1.14.2
+      - name: nginx
+      containers:
+    spec:
+        app: nginx
+      labels:
+    metadata:
+  template:
+      app: nginx
+    matchLabels:
+  selector:
+  replicas: 2
+spec:
+    app: nginx
+  labels:
+  namespace: default
+  name: nginx-deployment
+metadata:
+kind: Deployment
+

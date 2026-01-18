@@ -1,0 +1,33 @@
+---
+apiVersion: infra.baturorkun.com/v1alpha1
+kind: FeatureFlag
+metadata:
+  name: feature-dark-mode
+  namespace: default
+spec:
+  enabled: true
+---
+apiVersion: infra.baturorkun.com/v1alpha1
+kind: FeatureFlag
+metadata:
+  name: feature-beta-ui
+  namespace: default
+spec:
+  enabled: false
+---
+apiVersion: infra.baturorkun.com/v1alpha1
+kind: FeatureFlag
+metadata:
+  name: feature-analytics
+  namespace: default
+spec:
+  enabled: true
+---
+apiVersion: infra.baturorkun.com/v1alpha1
+kind: FeatureFlag
+metadata:
+  name: feature-experimental
+  namespace: default
+spec:
+  enabled: false
+

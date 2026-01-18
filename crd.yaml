@@ -1,0 +1,6 @@
+apiVersion: infra.baturorkun.com/v1alpha1
+kind: FeatureFlag
+metadata:
+  name: demo-flag
+spec:
+  enabled: true
