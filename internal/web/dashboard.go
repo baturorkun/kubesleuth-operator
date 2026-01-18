@@ -115,13 +115,7 @@ const dashboardHTML = `<!DOCTYPE html>
             width: 8px;
             height: 8px;
             border-radius: 50%;
-            margin-right: 6px;
-            vertical-align: middle;
-        }
-        .status-cell {
-            display: flex;
-            align-items: center;
-            white-space: nowrap;
+            flex-shrink: 0;
         }
         .status-pending { background: #ffc107; }
         .status-running { background: #17a2b8; }
@@ -146,6 +140,13 @@ const dashboardHTML = `<!DOCTYPE html>
             padding: 12px;
             border-bottom: 1px solid #dee2e6;
             font-size: 14px;
+        }
+        .status-cell {
+            display: inline-flex;
+            align-items: center;
+            white-space: nowrap;
+            gap: 6px;
+            vertical-align: middle;
         }
         tr:hover {
             background: #f8f9fa;
@@ -440,11 +441,14 @@ const dashboardHTML = `<!DOCTYPE html>
                 row.insertCell(2).textContent = pod.namespace;
                 
                 const phaseCell = row.insertCell(3);
-                phaseCell.className = 'status-cell';
+                const statusContainer = document.createElement('span');
+                statusContainer.className = 'status-cell';
                 const statusIndicator = document.createElement('span');
                 statusIndicator.className = 'status-indicator status-' + pod.phase.toLowerCase();
-                phaseCell.appendChild(statusIndicator);
-                phaseCell.appendChild(document.createTextNode(pod.phase));
+                const phaseText = document.createTextNode(pod.phase);
+                statusContainer.appendChild(statusIndicator);
+                statusContainer.appendChild(phaseText);
+                phaseCell.appendChild(statusContainer);
                 
                 const ownerCell = row.insertCell(4);
                 if (pod.ownerKind && pod.ownerName) {

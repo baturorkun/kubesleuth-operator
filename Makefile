@@ -109,7 +109,7 @@ lint-config: golangci-lint ## Verify golangci-lint linter configuration
 
 .PHONY: build
 build: manifests generate fmt vet ## Build manager binary.
-	go build -o bin/manager ./cmd
+	go build -ldflags="-s -w" -o bin/manager ./cmd
 
 .PHONY: run
 run: manifests generate fmt vet ## Run a controller from your host.
@@ -123,7 +123,7 @@ docker-build: ## Build docker image with the manager.
 	@echo "Building image $(IMG) with $(CONTAINER_ENGINE)"
 	# Force pull and no-cache to avoid reusing a layer that ran 'cmd/main.go'.
 	# Pass BUILD_CMD to ensure the builder uses './cmd' (module-mode package path).
-	$(CONTAINER_ENGINE) build --pull --no-cache -t $(IMG) --build-arg BUILD_CMD="go build -a -o manager ./cmd" .
+	$(CONTAINER_ENGINE) build --pull --no-cache -t $(IMG) --build-arg BUILD_CMD="go build -ldflags=\"-s -w\" -a -o manager ./cmd" .
 
 .PHONY: docker-push
 docker-push: ## Push docker image with the manager.
