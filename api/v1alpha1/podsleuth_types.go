@@ -17,6 +17,7 @@ limitations under the License.
 package v1alpha1
 
 import (
+	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
@@ -31,6 +32,10 @@ type PodSleuthSpec struct {
 	// If not specified, monitors all pods in all namespaces.
 	// +optional
 	PodLabelSelector *metav1.LabelSelector `json:"podLabelSelector,omitempty"`
+
+	// LogAnalysis enables log analysis for running but not ready pods
+	// +optional
+	LogAnalysis *LogAnalysisConfig `json:"logAnalysis,omitempty"`
 }
 
 // ContainerError contains detailed error information for a specific container
@@ -78,6 +83,114 @@ type PodCondition struct {
 	Message string `json:"message,omitempty"`
 }
 
+// LogAnalysisConfig defines configuration for log analysis
+type LogAnalysisConfig struct {
+	// Enabled enables log analysis for non-ready pods
+	Enabled bool `json:"enabled"`
+
+	// Method specifies the analysis method: "pattern" or "ai"
+	// Default: "pattern"
+	// +optional
+	Method string `json:"method,omitempty"`
+
+	// LinesToAnalyze is the number of recent log lines to fetch and analyze
+	// Default: 100
+	// +optional
+	LinesToAnalyze *int32 `json:"linesToAnalyze,omitempty"`
+
+	// FilterErrorsOnly if true, filters error/warning lines from the last LinesToAnalyze lines
+	// Process: 1) Fetch last LinesToAnalyze lines, 2) Filter for errors/warnings, 3) Analyze filtered lines
+	// Default: true
+	// +optional
+	FilterErrorsOnly *bool `json:"filterErrorsOnly,omitempty"`
+
+	// Patterns defines custom error patterns for pattern matching method
+	// If not specified, default patterns will be used (connection errors, service unavailable, etc.)
+	// Each pattern should be a regex that matches error messages
+	// +optional
+	Patterns []ErrorPattern `json:"patterns,omitempty"`
+
+	// AIEndpoint is the URL endpoint for AI analysis (required if method is "ai")
+	// Examples:
+	//   - OpenAI: "https://api.openai.com/v1/chat/completions"
+	//   - OpenAI-compatible (Together AI, Groq, LocalAI, vLLM, etc.): "https://api.together.xyz/v1/chat/completions"
+	//   - Anthropic: "https://api.anthropic.com/v1/messages"
+	//   - Ollama: "http://localhost:11434/api/generate" or "http://ollama-service:11434/api/generate"
+	//   - Custom: "https://your-ai-service.com/api/analyze"
+	// +optional
+	AIEndpoint string `json:"aiEndpoint,omitempty"`
+
+	// AIFormat specifies the API format to use: "openai", "anthropic", "ollama", or "generic"
+	// Default: "openai" (for maximum compatibility with OpenAI-compatible services)
+	// Use "openai" for OpenAI and OpenAI-compatible services (Together AI, Groq, LocalAI, vLLM, etc.)
+	// +optional
+	AIFormat string `json:"aiFormat,omitempty"`
+
+	// AIModel specifies the model name to use for AI analysis
+	// Examples:
+	//   - OpenAI: "gpt-3.5-turbo", "gpt-4", "gpt-4-turbo"
+	//   - Anthropic: "claude-3-haiku-20240307", "claude-3-opus-20240229"
+	//   - Ollama: "llama2", "llama", "qwen", "mistral", etc.
+	// If not specified, defaults will be used based on the format:
+	//   - OpenAI: "gpt-3.5-turbo"
+	//   - Anthropic: "claude-3-haiku-20240307"
+	//   - Ollama: "llama2"
+	// +optional
+	AIModel string `json:"aiModel,omitempty"`
+
+	// AIAPIKey is the API key for AI analysis (required if method is "ai" and endpoint requires auth)
+	// Should be stored as a Kubernetes Secret reference
+	// +optional
+	AIAPIKey *corev1.SecretKeySelector `json:"aiApiKey,omitempty"`
+
+	// AIAuthHeader specifies the HTTP header name for authentication
+	// Default: "Authorization"
+	// +optional
+	AIAuthHeader string `json:"aiAuthHeader,omitempty"`
+
+	// AIAuthPrefix specifies the prefix for the auth header value (e.g., "Bearer", "ApiKey")
+	// Default: "Bearer"
+	// +optional
+	AIAuthPrefix string `json:"aiAuthPrefix,omitempty"`
+}
+
+// ErrorPattern defines a pattern to match error messages in logs
+type ErrorPattern struct {
+	// Name is a descriptive name for this pattern (e.g., "KafkaConnectionError")
+	Name string `json:"name"`
+
+	// Pattern is the regex pattern to match against log lines
+	Pattern string `json:"pattern"`
+
+	// RootCause is the root cause message to report when this pattern matches
+	// If empty, the matched log line will be used as the root cause
+	// +optional
+	RootCause string `json:"rootCause,omitempty"`
+
+	// Priority determines which pattern to use if multiple patterns match
+	// Higher priority patterns are preferred. Default: 0
+	// +optional
+	Priority int32 `json:"priority,omitempty"`
+}
+
+// LogAnalysisResult contains results from log analysis
+type LogAnalysisResult struct {
+	// RootCause is the identified root cause from log analysis
+	RootCause string `json:"rootCause,omitempty"`
+
+	// Confidence is the confidence level (0-100) of the analysis
+	Confidence int32 `json:"confidence,omitempty"`
+
+	// Method used for analysis: "pattern" or "ai"
+	Method string `json:"method,omitempty"`
+
+	// ErrorLines contains the error lines that led to this conclusion
+	ErrorLines []string `json:"errorLines,omitempty"`
+
+	// AnalyzedAt is when the analysis was performed
+	AnalyzedAt metav1.Time `json:"analyzedAt,omitempty"`
+}
+
 // NonReadyPodInfo contains information about a non-ready pod
 type NonReadyPodInfo struct {
 	// Name is the name of the pod
@@ -112,6 +225,10 @@ type NonReadyPodInfo struct {
 	// PodConditions contains all pod conditions for comprehensive status
 	// +optional
 	PodConditions []PodCondition `json:"podConditions,omitempty"`
+
+	// LogAnalysis contains results from log analysis if enabled
+	// +optional
+	LogAnalysis *LogAnalysisResult `json:"logAnalysis,omitempty"`
 }
 
 // PodSleuthStatus defines the observed state of PodSleuth

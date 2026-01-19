@@ -1,4 +1,11 @@
 ## Append samples of your project ##
 resources:
 - infra_v1alpha1_podsleuth.yaml
+- infra_v1alpha1_podsleuth-minimal-example.yaml
+- infra_v1alpha1_podsleuth-match-expressions-example.yaml
+- infra_v1alpha1_podsleuth-ai-example.yaml
+- infra_v1alpha1_podsleuth-openai-example.yaml
+- infra_v1alpha1_podsleuth-openai-compatible-example.yaml
+- infra_v1alpha1_podsleuth-ollama-example.yaml
+- infra_v1alpha1_podsleuth-custom-ai-example.yaml
 # +kubebuilder:scaffold:manifestskustomizesamples

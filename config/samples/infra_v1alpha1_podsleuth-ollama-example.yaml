@@ -1,0 +1,38 @@
+apiVersion: apps.ops.dev/v1alpha1
+kind: PodSleuth
+metadata:
+  name: podsleuth-ollama-example
+spec:
+  reconcileInterval: 5m
+  
+  podLabelSelector:
+    matchLabels:
+      environment: production
+  
+  logAnalysis:
+    enabled: true
+    method: "ai"  # Use AI analysis
+    
+    # Ollama endpoint (adjust based on your setup)
+    # For local development: "http://localhost:11434/api/generate"
+    # For cluster service: "http://ollama-service.default.svc.cluster.local:11434/api/generate"
+    aiEndpoint: "http://ollama-service.default.svc.cluster.local:11434/api/generate"
+    
+    # AI Format - specify Ollama format (optional, auto-detected from endpoint)
+    # Use "ollama" for Ollama local models
+    # If not specified, auto-detected from endpoint URL containing "/api/generate"
+    # aiFormat: "ollama"
+    
+    # Specify which Ollama model to use (e.g., "llama2", "llama", "qwen", "mistral")
+    # If not specified, defaults to "llama2"
+    aiModel: "qwen"
+    
+    # Ollama typically doesn't require auth, but if yours does, uncomment:
+    # aiAuthHeader: "Authorization"
+    # aiAuthPrefix: "Bearer"
+    # aiApiKey:
+    #   name: ollama-api-key
+    #   key: api-key
+    
+    linesToAnalyze: 100
+    filterErrorsOnly: true

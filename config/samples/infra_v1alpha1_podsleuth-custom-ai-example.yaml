@@ -1,0 +1,43 @@
+apiVersion: apps.ops.dev/v1alpha1
+kind: PodSleuth
+metadata:
+  name: podsleuth-custom-ai-example
+spec:
+  reconcileInterval: 5m
+  
+  podLabelSelector:
+    matchLabels:
+      environment: production
+  
+  logAnalysis:
+    enabled: true
+    method: "ai"
+    
+    # Custom AI service endpoint
+    # This example shows how to use any AI service with custom authentication
+    aiEndpoint: "https://your-ai-service.com/api/analyze"
+    
+    # AI Format - explicitly specify the API format for custom services
+    # For custom/unknown services, you may need to explicitly set aiFormat to match the API format
+    # Supported values: "openai", "anthropic", "ollama"
+    # If your service uses OpenAI-compatible API, use "openai"
+    # If your service uses Anthropic-compatible API, use "anthropic"
+    # If your service uses Ollama-compatible API, use "ollama"
+    # If not specified, defaults to "openai" for unknown endpoints
+    aiFormat: "openai"  # Adjust based on your service's API format
+    
+    # AI Model - specify which model to use for your custom service
+    # The model name depends on what your service supports
+    # Examples: "gpt-4", "claude-3-5-sonnet-20241022", "llama2", "custom-model-v1"
+    aiModel: "custom-model-v1"  # Adjust based on your service's available models
+    
+    # Custom authentication (if your service uses different header)
+    aiAuthHeader: "X-API-Key"  # Custom header name instead of "Authorization"
+    aiAuthPrefix: ""           # No prefix, just the key value (or use "ApiKey" if needed)
+    
+    aiApiKey:
+      name: custom-api-key
+      key: api-key
+    
+    linesToAnalyze: 100
+    filterErrorsOnly: true

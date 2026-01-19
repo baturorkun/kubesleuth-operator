@@ -27,6 +27,7 @@ import (
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/client-go/kubernetes"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/handler"
@@ -39,13 +40,16 @@ import (
 // PodSleuthReconciler reconciles a PodSleuth object
 type PodSleuthReconciler struct {
 	client.Client
-	Scheme *runtime.Scheme
+	Scheme    *runtime.Scheme
+	K8sClient kubernetes.Interface
 }
 
 // +kubebuilder:rbac:groups=apps.ops.dev,resources=podsleuths,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=apps.ops.dev,resources=podsleuths/status,verbs=get;update;patch
 // +kubebuilder:rbac:groups=apps.ops.dev,resources=podsleuths/finalizers,verbs=update
 // +kubebuilder:rbac:groups="",resources=pods,verbs=get;list;watch
+// +kubebuilder:rbac:groups="",resources=pods/log,verbs=get;list
+// +kubebuilder:rbac:groups="",resources=secrets,verbs=get;list
 // +kubebuilder:rbac:groups=apps,resources=deployments,verbs=get;list
 // +kubebuilder:rbac:groups=apps,resources=statefulsets,verbs=get;list
 // +kubebuilder:rbac:groups=apps,resources=replicasets,verbs=get;list
@@ -118,6 +122,30 @@ func (r *PodSleuthReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 			Message:         message,
 			ContainerErrors: containerErrors,
 			PodConditions:   conditions,
+		}
+
+		// Perform log analysis if enabled and pod is running but not ready
+		if podSleuth.Spec.LogAnalysis != nil && podSleuth.Spec.LogAnalysis.Enabled {
+			if pod.Status.Phase == corev1.PodRunning {
+				// Only analyze logs for running pods that are not ready
+				logAnalysisResult, err := analyzeLogs(ctx, r.Client, r.K8sClient, &pod, podSleuth.Spec.LogAnalysis)
+				if err != nil {
+					logger.Info("log analysis failed", "pod", pod.Name, "namespace", pod.Namespace, "error", err)
+				} else if logAnalysisResult != nil {
+					podInfo.LogAnalysis = logAnalysisResult
+					// Append log analysis findings to the message
+					if logAnalysisResult.RootCause != "" {
+						if podInfo.Message != "" {
+							podInfo.Message = podInfo.Message + ". Log analysis: " + logAnalysisResult.RootCause
+						} else {
+							podInfo.Message = "Log analysis: " + logAnalysisResult.RootCause
+						}
+					}
+					logger.Info("log analysis completed", "pod", pod.Name, "namespace", pod.Namespace, "rootCause", logAnalysisResult.RootCause, "method", logAnalysisResult.Method, "confidence", logAnalysisResult.Confidence, "errorLines", len(logAnalysisResult.ErrorLines))
+				} else {
+					logger.Info("log analysis returned no results", "pod", pod.Name, "namespace", pod.Namespace)
+				}
+			}
 		}
 
 		nonReadyPods = append(nonReadyPods, podInfo)

@@ -161,7 +161,8 @@ spec:
         image: busybox:latest
         command: ['sh', '-c', 'sleep 2 && exit 1']  # Crashes after 2 seconds
 ---
-# Test 5: ImagePullBackOff - Another invalid image scenario
+# Test 5: Running but not ready - Logs Kafka connection errors for log analysis pattern testing
+# This deployment has 2 containers: nginx (ready) and kafka-client (not ready)
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -192,6 +193,85 @@ spec:
             port: 80
           initialDelaySeconds: 5
           periodSeconds: 10
-      - name: bad-image
-        image: registry.invalid/image:tag  # Invalid registry, will cause ImagePullBackOff
-        command: ['sh', '-c', 'sleep 3600']
+      - name: kafka-client
+        image: busybox:latest
+        command: ['sh', '-c']
+        args:
+          - |
+            echo "Starting application..."
+            sleep 2
+            echo "ERROR: Connection to Kafka broker failed - broker not available"
+            echo "WARN: Retrying connection to kafka://kafka-service:9092"
+            echo "ERROR: Kafka connection to node kafka-0:9092 failed"
+            echo "ERROR: Leader not available for topic my-topic"
+            sleep 1
+            echo "ERROR: Kafka connection failed - unable to reach broker"
+            echo "Application cannot proceed without Kafka connection"
+            # Keep running but fail readiness probe
+            # Container stays in Running state but readiness probe fails
+            while true; do
+              echo "ERROR: Kafka service is down or unreachable"
+              sleep 5
+            done
+        # Readiness probe that always fails - keeps container Running but Not Ready
+        readinessProbe:
+          exec:
+            command:
+              - sh
+              - -c
+              - exit 1  # Always fails, so container is Running but Not Ready
+          initialDelaySeconds: 5
+          periodSeconds: 10
+          failureThreshold: 1
+---
+# Test 6: Running but not ready - Single container with Redis connection errors for log analysis pattern testing
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: app6-deployment
+  namespace: podsleuth-test3
+  labels:
+    app: app6
+    environment: test
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: app6
+  template:
+    metadata:
+      labels:
+        app: app6
+        environment: test
+    spec:
+      containers:
+      - name: redis-client
+        image: busybox:latest
+        command: ['sh', '-c']
+        args:
+          - |
+            echo "Starting Redis client application..."
+            sleep 2
+            echo "ERROR: Redis connection refused - cannot connect to redis://redis-service:6379"
+            echo "WARN: Retrying Redis connection..."
+            echo "ERROR: Redis connection timeout after 5 seconds"
+            echo "ERROR: Cannot connect to Redis server"
+            sleep 1
+            echo "ERROR: Redis service is down or unreachable"
+            echo "Application cannot proceed without Redis connection"
+            # Keep running but fail readiness probe
+            # Container stays in Running state but readiness probe fails
+            while true; do
+              echo "ERROR: Redis connection refused - service unavailable"
+              sleep 5
+            done
+        # Readiness probe that always fails - keeps container Running but Not Ready
+        readinessProbe:
+          exec:
+            command:
+              - sh
+              - -c
+              - exit 1  # Always fails, so container is Running but Not Ready
+          initialDelaySeconds: 5
+          periodSeconds: 10
+          failureThreshold: 1

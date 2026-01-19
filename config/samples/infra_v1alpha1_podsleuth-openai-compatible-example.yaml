@@ -1,0 +1,44 @@
+apiVersion: apps.ops.dev/v1alpha1
+kind: PodSleuth
+metadata:
+  name: podsleuth-openai-compatible-example
+spec:
+  reconcileInterval: 5m
+  
+  podLabelSelector:
+    matchLabels:
+      environment: production
+  
+  logAnalysis:
+    enabled: true
+    method: "ai"
+    
+    # OpenAI-compatible endpoint examples:
+    # - Together AI: "https://api.together.xyz/v1/chat/completions"
+    # - Groq: "https://api.groq.com/openai/v1/chat/completions"
+    # - LocalAI: "http://localai-service:8080/v1/chat/completions"
+    # - vLLM: "http://vllm-service:8000/v1/chat/completions"
+    # - Any OpenAI-compatible API endpoint
+    aiEndpoint: "https://api.together.xyz/v1/chat/completions"
+    
+    # Explicitly specify OpenAI format for OpenAI-compatible services
+    aiFormat: "openai"
+    
+    # AI Model - specify which model to use (optional)
+    # Different OpenAI-compatible services support different models
+    # Examples:
+    #   - Together AI: "meta-llama/Llama-3-70b-chat-hf", "mistralai/Mixtral-8x7B-Instruct-v0.1"
+    #   - Groq: "llama-3.1-70b-versatile", "mixtral-8x7b-32768"
+    #   - LocalAI/vLLM: Depends on what models you've deployed
+    # If not specified, defaults to "gpt-3.5-turbo"
+    # aiModel: "meta-llama/Llama-3-70b-chat-hf"  # Adjust based on your service
+    
+    # Authentication (adjust based on your service)
+    aiAuthHeader: "Authorization"
+    aiAuthPrefix: "Bearer"
+    aiApiKey:
+      name: together-ai-api-key  # Or groq-api-key, localai-api-key, etc.
+      key: api-key
+    
+    linesToAnalyze: 100
+    filterErrorsOnly: true

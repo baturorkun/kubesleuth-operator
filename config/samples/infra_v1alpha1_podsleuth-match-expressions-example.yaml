@@ -1,0 +1,28 @@
+apiVersion: apps.ops.dev/v1alpha1
+kind: PodSleuth
+metadata:
+  name: podsleuth-match-expressions-example
+spec:
+  reconcileInterval: 5m
+  
+  # Example using matchExpressions for complex pod filtering
+  # This monitors pods in production or staging environments, but excludes test tier
+  podLabelSelector:
+    matchExpressions:
+      - key: environment
+        operator: In
+        values:
+        - production
+        - staging
+      - key: tier
+        operator: NotIn
+        values:
+        - test
+      - key: app
+        operator: Exists  # Pod must have an "app" label
+  
+  logAnalysis:
+    enabled: true
+    method: "pattern"
+    linesToAnalyze: 100
+    filterErrorsOnly: true

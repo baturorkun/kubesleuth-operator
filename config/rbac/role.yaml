@@ -13,6 +13,14 @@ rules:
   - list
   - watch
 - apiGroups:
+  - ""
+  resources:
+  - pods/log
+  - secrets
+  verbs:
+  - get
+  - list
+- apiGroups:
   - apps
   resources:
   - deployments

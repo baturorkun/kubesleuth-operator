@@ -1,0 +1,63 @@
+apiVersion: apps.ops.dev/v1alpha1
+kind: PodSleuth
+metadata:
+  name: podsleuth-ai-example
+spec:
+  reconcileInterval: 5m
+  
+  podLabelSelector:
+    matchLabels:
+      app: myapp
+  
+  # Log analysis with AI endpoint (generic example)
+  # This example shows AI analysis configuration
+  # See infra_v1alpha1_podsleuth-openai-example.yaml for OpenAI-specific example
+  # See infra_v1alpha1_podsleuth-ollama-example.yaml for Ollama-specific example
+  # See infra_v1alpha1_podsleuth-custom-ai-example.yaml for custom service example
+  logAnalysis:
+    enabled: true
+    method: "ai"  # Use AI analysis instead of pattern matching
+    
+    # AI Endpoint - configure based on your AI service
+    # Common examples:
+    #   - OpenAI: "https://api.openai.com/v1/chat/completions"
+    #   - Anthropic: "https://api.anthropic.com/v1/messages"
+    #   - Ollama (local): "http://localhost:11434/api/generate"
+    #   - Ollama (cluster): "http://ollama-service.default.svc.cluster.local:11434/api/generate"
+    #   - Custom: "https://your-ai-service.com/api/analyze"
+    aiEndpoint: "https://api.openai.com/v1/chat/completions"
+    
+    # AI Format - specify the API format (optional)
+    # Supported values: "openai", "anthropic", "ollama"
+    # If not specified, defaults to "openai" for unknown endpoints
+    # Use "openai" for OpenAI and OpenAI-compatible services (Together AI, Groq, LocalAI, vLLM, etc.)
+    # Use "anthropic" for Anthropic Claude API
+    # Use "ollama" for Ollama local models
+    # aiFormat: "openai"
+    
+    # AI Model - specify which model to use (optional)
+    # If not specified, defaults are:
+    #   - OpenAI: "gpt-3.5-turbo"
+    #   - Anthropic: "claude-3-5-sonnet-20241022"
+    #   - Ollama: "llama2"
+    # Examples:
+    #   - OpenAI: "gpt-4", "gpt-3.5-turbo", "gpt-4-turbo"
+    #   - Anthropic: "claude-3-5-sonnet-20241022", "claude-3-opus-20240229"
+    #   - Ollama: "llama2", "qwen", "mistral"
+    # aiModel: "gpt-4"
+    
+    # Authentication configuration (optional, defaults shown)
+    aiAuthHeader: "Authorization"  # HTTP header name for auth (default: "Authorization")
+    aiAuthPrefix: "Bearer"        # Prefix for auth value (default: "Bearer", use "" for no prefix)
+    
+    # API Key from Kubernetes Secret
+    # First, create a secret with your API key:
+    # kubectl create secret generic openai-api-key --from-literal=api-key=sk-... -n <namespace>
+    aiApiKey:
+      name: openai-api-key      # Name of the secret
+      key: api-key              # Key in the secret
+      # Note: Secret must be in the same namespace as the pods being monitored
+    
+    # Log analysis settings
+    linesToAnalyze: 100
+    filterErrorsOnly: true

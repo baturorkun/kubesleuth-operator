@@ -1,0 +1,12 @@
+apiVersion: apps.ops.dev/v1alpha1
+kind: PodSleuth
+metadata:
+  name: podsleuth-minimal
+spec:
+  # Only pod label selector is required
+  # All other fields use sensible defaults:
+  # - reconcileInterval: 5m
+  # - logAnalysis: disabled
+  podLabelSelector:
+    matchLabels:
+      app: myapp

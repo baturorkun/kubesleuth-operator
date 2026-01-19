@@ -2,20 +2,115 @@ apiVersion: apps.ops.dev/v1alpha1
 kind: PodSleuth
 metadata:
   name: podsleuth-sample
+  labels:
+    app: podsleuth
+    environment: production
 spec:
-  # Optional: Reconcile interval (default: 5 minutes)
-  # If not specified, defaults to 5 minutes
+  # Reconcile interval - how often to check for non-ready pods
+  # Default: 5 minutes if not specified
   reconcileInterval: 5m
   
-  # Optional: Pod label selector to filter pods across all namespaces
+  # Pod label selector - filter which pods to monitor across all namespaces
   # If not specified, monitors all pods in all namespaces
   podLabelSelector:
     matchLabels:
+      environment: production
       app: myapp
-    # or use matchExpressions for more complex filtering
+    # Alternative: use matchExpressions for more complex filtering
     # matchExpressions:
     #   - key: environment
     #     operator: In
     #     values:
     #     - production
     #     - staging
+    #   - key: tier
+    #     operator: NotIn
+    #     values:
+    #     - test
+  
+  # Log analysis configuration
+  # Enables log analysis for running but not ready pods to identify root causes
+  logAnalysis:
+    # Enable log analysis
+    enabled: true
+    
+    # Analysis method: "pattern" (default) or "ai"
+    # - "pattern": Fast, deterministic, works offline, no external dependencies
+    # - "ai": Context-aware, handles complex cases, requires AI endpoint
+    method: "pattern"
+    
+    # Number of recent log lines to fetch and analyze
+    # Default: 100
+    linesToAnalyze: 100
+    
+    # Filter for error/warning lines only
+    # Process: 1) Fetch last N lines, 2) Filter for errors/warnings, 3) Analyze
+    # Default: true
+    filterErrorsOnly: true
+    
+    # Custom error patterns (optional)
+    # If not specified, default patterns are used (connection errors, service unavailable, etc.)
+    # Patterns are evaluated in priority order (higher priority first)
+    patterns:
+      - name: "KafkaConnectionError"
+        pattern: "(?i)(broker not available|leader not available|connection to node|kafka.*connection.*failed|kafka.*service.*down|kafka.*service.*unreachable)"
+        rootCause: "Kafka service is down or unreachable"
+        priority: 15
+      
+      - name: "DatabaseConnectionError"
+        pattern: "(?i)(connection pool exhausted|too many connections|database.*connection.*failed|cannot connect to database)"
+        rootCause: "Database connection failed - connection pool may be exhausted or database is down"
+        priority: 12
+      
+      - name: "RedisConnectionError"
+        pattern: "(?i)(redis.*connection.*refused|redis.*timeout|cannot connect to redis)"
+        rootCause: "Redis service is down or unreachable"
+        priority: 12
+      
+      - name: "CustomServiceError"
+        pattern: "(?i)(my-service.*down|service.*unavailable|upstream.*error)"
+        rootCause: "Custom service is unavailable"
+        priority: 10
+    
+    # AI Analysis Configuration (optional - only used if method is "ai")
+    # Uncomment and configure if you want to use AI analysis instead of pattern matching
+    
+    # AI Endpoint - URL for your AI service
+    # Examples:
+    #   - OpenAI: "https://api.openai.com/v1/chat/completions"
+    #   - Anthropic: "https://api.anthropic.com/v1/messages"
+    #   - Ollama (local): "http://localhost:11434/api/generate"
+    #   - Ollama (cluster): "http://ollama-service.default.svc.cluster.local:11434/api/generate"
+    #   - Custom: "https://your-ai-service.com/api/analyze"
+    # aiEndpoint: "https://api.openai.com/v1/chat/completions"
+    
+    # AI Format - specify the API format (optional)
+    # Supported values: "openai", "anthropic", "ollama"
+    # If not specified, defaults to "openai" for unknown endpoints
+    # Use "openai" for OpenAI and OpenAI-compatible services (Together AI, Groq, LocalAI, vLLM, etc.)
+    # Use "anthropic" for Anthropic Claude API
+    # Use "ollama" for Ollama local models
+    # aiFormat: "openai"
+    
+    # AI Model - Specify which model to use (optional, defaults based on format)
+    # Examples:
+    #   - OpenAI: "gpt-3.5-turbo", "gpt-4", "gpt-4-turbo"
+    #   - Anthropic: "claude-3-haiku-20240307", "claude-3-opus-20240229"
+    #   - Ollama: "llama2", "llama", "qwen", "mistral"
+    # If not specified, defaults will be used:
+    #   - OpenAI: "gpt-3.5-turbo"
+    #   - Anthropic: "claude-3-haiku-20240307"
+    #   - Ollama: "llama2"
+    # aiModel: "gpt-4"
+    
+    # Authentication header configuration (for AI method)
+    # aiAuthHeader: "Authorization"  # HTTP header name for auth (default: "Authorization")
+    # aiAuthPrefix: "Bearer"        # Prefix for auth value (default: "Bearer", use "" for no prefix)
+    
+    # API Key from Kubernetes Secret (for AI method)
+    # First, create a secret with your API key:
+    # kubectl create secret generic openai-api-key --from-literal=api-key=sk-... -n <namespace>
+    # aiApiKey:
+    #   name: openai-api-key      # Name of the secret
+    #   key: api-key              # Key in the secret
+    #   # Note: Secret must be in the same namespace as the pods being monitored

@@ -1,0 +1,35 @@
+apiVersion: apps.ops.dev/v1alpha1
+kind: PodSleuth
+metadata:
+  name: podsleuth-openai-example
+spec:
+  reconcileInterval: 5m
+  
+  podLabelSelector:
+    matchLabels:
+      environment: production
+  
+  logAnalysis:
+    enabled: true
+    method: "ai"
+    
+    # OpenAI endpoint (or any OpenAI-compatible service like Together AI, Groq, LocalAI, vLLM, etc.)
+    aiEndpoint: "https://api.openai.com/v1/chat/completions"
+    
+    # Explicitly specify OpenAI format (optional - defaults to "openai" for unknown endpoints)
+    # Use "openai" for OpenAI and OpenAI-compatible services (Together AI, Groq, LocalAI, vLLM, etc.)
+    aiFormat: "openai"
+    
+    # Specify which model to use (e.g., "gpt-3.5-turbo", "gpt-4", "gpt-4-turbo")
+    # If not specified, defaults to "gpt-3.5-turbo"
+    # aiModel: "gpt-4"
+    
+    # OpenAI authentication
+    aiAuthHeader: "Authorization"
+    aiAuthPrefix: "Bearer"
+    aiApiKey:
+      name: openai-api-key
+      key: api-key
+    
+    linesToAnalyze: 100
+    filterErrorsOnly: true

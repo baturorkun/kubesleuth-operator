@@ -18,3 +18,22 @@ spec:
     #     values:
     #     - test
     #     - staging
+  
+  # Log analysis configuration for test environment
+  # Configured to detect Kafka connection errors from test5 (app5-deployment)
+  # and Redis connection errors from test6 (app6-deployment)
+  logAnalysis:
+    enabled: true
+    method: "pattern"
+    linesToAnalyze: 200
+    filterErrorsOnly: true
+    # Custom patterns to match test5 and test6 deployment errors
+    patterns:
+      - name: "KafkaConnectionError"
+        pattern: "(?i)(broker not available|leader not available|connection to node|kafka.*connection.*failed|kafka.*service.*down|kafka.*service.*unreachable)"
+        rootCause: "Kafka service is down or unreachable"
+        priority: 15
+      - name: "RedisConnectionError"
+        pattern: "(?i)(redis.*connection.*refused|redis.*timeout|cannot connect to redis)"
+        rootCause: "Redis service is down or unreachable"
+        priority: 12

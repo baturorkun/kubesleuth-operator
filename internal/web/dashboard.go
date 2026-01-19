@@ -21,7 +21,7 @@ const dashboardHTML = `<!DOCTYPE html>
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>PodSleuth Dashboard</title>
+    <title>KubeSleuth Dashboard</title>
     <style>
         * {
             margin: 0;
@@ -248,7 +248,7 @@ const dashboardHTML = `<!DOCTYPE html>
 </head>
 <body>
     <div class="container">
-        <h1>PodSleuth Dashboard</h1>
+        <h1>KubeSleuth Dashboard</h1>
         <div class="subtitle">Monitor non-ready pods across your cluster</div>
         
         <div class="stats">
@@ -418,16 +418,21 @@ const dashboardHTML = `<!DOCTYPE html>
 
             filteredPods.forEach((pod, index) => {
                 const hasDetails = (pod.containerErrors && pod.containerErrors.length > 0) || 
-                                  (pod.podConditions && pod.podConditions.length > 0);
+                                  (pod.podConditions && pod.podConditions.length > 0) ||
+                                  (pod.logAnalysis && pod.logAnalysis.rootCause);
                 
-                // Main row
+                // Always show expand icon if log analysis is present (it's important)
+                const hasLogAnalysis = pod.logAnalysis && pod.logAnalysis.rootCause;
+                
+                // Main row - make expandable if has details or log analysis
                 const row = tbody.insertRow();
-                row.className = hasDetails ? 'expandable-row' : '';
-                row.onclick = hasDetails ? () => toggleDetails(index) : null;
+                const isExpandable = hasDetails || hasLogAnalysis;
+                row.className = isExpandable ? 'expandable-row' : '';
+                row.onclick = isExpandable ? () => toggleDetails(index) : null;
                 
-                // Expand icon
+                // Expand icon - always show if log analysis is present
                 const expandCell = row.insertCell(0);
-                if (hasDetails) {
+                if (hasDetails || hasLogAnalysis) {
                     const icon = document.createElement('span');
                     icon.className = 'expand-icon';
                     icon.textContent = '▶';
@@ -471,13 +476,70 @@ const dashboardHTML = `<!DOCTYPE html>
                 }
                 
                 const messageCell = row.insertCell(6);
-                messageCell.textContent = (pod.message || '-').substring(0, 100);
-                if (pod.message && pod.message.length > 100) {
-                    messageCell.textContent += '...';
+                messageCell.style.cssText = 'vertical-align: top; padding: 8px;';
+                
+                // Extract and highlight log analysis message if present
+                let displayMessage = pod.message || '-';
+                let logAnalysisMessage = '';
+                
+                // Check for log analysis in multiple ways (handle both camelCase and PascalCase)
+                if (pod.logAnalysis) {
+                    logAnalysisMessage = pod.logAnalysis.rootCause || pod.logAnalysis.RootCause || '';
                 }
                 
-                // Details row
-                if (hasDetails) {
+                // Extract log analysis from message if it was appended by controller
+                // The controller appends ". Log analysis: ..." to the message
+                // We want to show both separately: log analysis prominently, then original Kubernetes message
+                let originalKubernetesMessage = displayMessage;
+                if (displayMessage && typeof displayMessage === 'string' && displayMessage.includes('Log analysis:')) {
+                    const parts = displayMessage.split('Log analysis:');
+                    if (parts.length > 1) {
+                        // If we don't have logAnalysis from object, use the one from message
+                        if (!logAnalysisMessage || logAnalysisMessage === '') {
+                            logAnalysisMessage = parts[1].trim();
+                        }
+                        // Get the original Kubernetes message (before log analysis was appended)
+                        originalKubernetesMessage = parts[0].trim();
+                        // Remove trailing period and space if present
+                        if (originalKubernetesMessage.endsWith('.')) {
+                            originalKubernetesMessage = originalKubernetesMessage.slice(0, -1).trim();
+                        }
+                    }
+                }
+                
+                // Build message cell - show original Kubernetes message first, then log analysis
+                messageCell.innerHTML = '';
+                
+                // First line: Original Kubernetes status message (always show if exists)
+                if (originalKubernetesMessage && originalKubernetesMessage !== '-' && originalKubernetesMessage !== null && originalKubernetesMessage !== '') {
+                    const msgLine = document.createElement('div');
+                    msgLine.style.cssText = 'font-size: 12px; color: #666; line-height: 1.4; margin-bottom: 4px;';
+                    let msgText = originalKubernetesMessage;
+                    if (msgText.length > 100) {
+                        msgText = msgText.substring(0, 100) + '...';
+                    }
+                    msgLine.textContent = msgText;
+                    messageCell.appendChild(msgLine);
+                } else if (!logAnalysisMessage || logAnalysisMessage === '') {
+                    // No log analysis - show message or default
+                    if (displayMessage && displayMessage !== '-') {
+                        messageCell.textContent = displayMessage.length > 100 ? displayMessage.substring(0, 100) + '...' : displayMessage;
+                    } else {
+                        messageCell.textContent = '-';
+                        messageCell.style.cssText = '';
+                    }
+                }
+                
+                // Second line: Log analysis (if present) - at the bottom, small icon
+                if (logAnalysisMessage && logAnalysisMessage !== '') {
+                    const logAnalysisLine = document.createElement('div');
+                    logAnalysisLine.style.cssText = 'line-height: 1.4; padding-top: 4px;';
+                    logAnalysisLine.innerHTML = '<span style="color: #ff9800; font-size: 11px;">🔍</span> <span style="font-size: 12px; font-weight: 600; color: #ff9800;">Log analysis:</span> <span style="font-size: 12px; color: #333; font-weight: 500;">' + escapeHtml(logAnalysisMessage) + '</span>';
+                    messageCell.appendChild(logAnalysisLine);
+                }
+                
+                // Details row - show if has details or log analysis
+                if (hasDetails || hasLogAnalysis) {
                     const detailsRow = tbody.insertRow();
                     detailsRow.className = 'details-row';
                     detailsRow.id = 'details-' + index;
@@ -550,8 +612,50 @@ const dashboardHTML = `<!DOCTYPE html>
                 html += '</div>';
             }
             
+            // Log Analysis - Make it prominent and visible
+            if (pod.logAnalysis && pod.logAnalysis.rootCause) {
+                html += '<div class="details-section" style="border-top: 3px solid #ffc107; padding-top: 16px; margin-top: 16px;">';
+                html += '<h4 style="color: #856404; font-size: 16px; margin-bottom: 12px;">🔍 Log Analysis - Root Cause Identified</h4>';
+                html += '<div class="container-error" style="background: #fff3cd; border-left: 4px solid #ffc107; padding: 12px;">';
+                html += '<div class="container-error-detail" style="font-size: 15px; color: #856404; font-weight: 700; margin-bottom: 8px;">' + escapeHtml(pod.logAnalysis.rootCause) + '</div>';
+                
+                if (pod.logAnalysis.confidence !== null && pod.logAnalysis.confidence !== undefined) {
+                    html += '<div class="container-error-detail"><strong>Confidence:</strong> ' + pod.logAnalysis.confidence + '%</div>';
+                }
+                
+                if (pod.logAnalysis.method) {
+                    html += '<div class="container-error-detail"><strong>Method:</strong> ' + pod.logAnalysis.method + '</div>';
+                }
+                
+                if (pod.logAnalysis.analyzedAt) {
+                    const analyzedDate = new Date(pod.logAnalysis.analyzedAt);
+                    html += '<div class="container-error-detail"><strong>Analyzed At:</strong> ' + analyzedDate.toLocaleString() + '</div>';
+                }
+                
+                if (pod.logAnalysis.errorLines && pod.logAnalysis.errorLines.length > 0) {
+                    html += '<div class="container-error-detail" style="margin-top: 8px;"><strong>Error Lines (' + pod.logAnalysis.errorLines.length + '):</strong></div>';
+                    html += '<div style="background: #f8f9fa; padding: 8px; border-radius: 4px; margin-top: 4px; max-height: 200px; overflow-y: auto; font-family: monospace; font-size: 11px;">';
+                    pod.logAnalysis.errorLines.slice(0, 20).forEach(line => {
+                        html += '<div style="margin: 2px 0; color: #721c24;">' + escapeHtml(line) + '</div>';
+                    });
+                    if (pod.logAnalysis.errorLines.length > 20) {
+                        html += '<div style="color: #666; font-style: italic;">... and ' + (pod.logAnalysis.errorLines.length - 20) + ' more lines</div>';
+                    }
+                    html += '</div>';
+                }
+                
+                html += '</div>';
+                html += '</div>';
+            }
+            
             html += '</div>';
             return html;
+        }
+        
+        function escapeHtml(text) {
+            const div = document.createElement('div');
+            div.textContent = text;
+            return div.innerHTML;
         }
 
         function updateLastUpdate() {
