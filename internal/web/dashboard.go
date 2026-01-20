@@ -244,6 +244,15 @@ const dashboardHTML = `<!DOCTYPE html>
             font-size: 12px;
             margin-top: 16px;
         }
+        .refresh-status {
+            display: inline-block;
+            margin-left: 8px;
+            padding: 2px 6px;
+            border-radius: 3px;
+            font-size: 11px;
+            background: #fff3cd;
+            color: #856404;
+        }
     </style>
 </head>
 <body>
@@ -304,12 +313,17 @@ const dashboardHTML = `<!DOCTYPE html>
         <div id="emptyState" class="empty-state" style="display: none;">
             <p>No non-ready pods found. All pods are healthy! 🎉</p>
         </div>
-        <div class="last-update" id="lastUpdate"></div>
+        <div class="last-update">
+            <span id="lastUpdate"></span>
+            <span id="refreshStatus" class="refresh-status" style="display: none;">Auto-refresh paused</span>
+        </div>
     </div>
 
     <script>
         let allPods = [];
         let filteredPods = [];
+        let expandedRows = new Set(); // Track which rows are expanded
+        let autoRefreshIntervalId = null; // Store interval ID for auto-refresh
 
         async function loadData() {
             const refreshBtn = document.getElementById('refreshBtn');
@@ -413,6 +427,9 @@ const dashboardHTML = `<!DOCTYPE html>
         }
 
         function renderTable() {
+            // Save currently expanded rows before re-rendering
+            const currentlyExpanded = new Set(expandedRows);
+            
             const tbody = document.getElementById('podsTableBody');
             tbody.innerHTML = '';
 
@@ -548,6 +565,16 @@ const dashboardHTML = `<!DOCTYPE html>
                     detailsCell.innerHTML = renderDetails(pod);
                 }
             });
+            
+            // Restore expanded state after re-rendering
+            currentlyExpanded.forEach(index => {
+                const detailsRow = document.getElementById('details-' + index);
+                const icon = document.getElementById('expand-icon-' + index);
+                if (detailsRow && icon) {
+                    detailsRow.classList.add('expanded');
+                    icon.textContent = '▼';
+                }
+            });
         }
 
         function toggleDetails(index) {
@@ -555,11 +582,39 @@ const dashboardHTML = `<!DOCTYPE html>
             const icon = document.getElementById('expand-icon-' + index);
             
             if (detailsRow.classList.contains('expanded')) {
+                // Closing details
                 detailsRow.classList.remove('expanded');
                 icon.textContent = '▶';
+                expandedRows.delete(index);
+                
+                // If no more expanded rows, resume auto-refresh
+                if (expandedRows.size === 0) {
+                    resumeAutoRefresh();
+                }
             } else {
+                // Opening details
                 detailsRow.classList.add('expanded');
                 icon.textContent = '▼';
+                expandedRows.add(index);
+                
+                // Pause auto-refresh when any row is expanded
+                pauseAutoRefresh();
+            }
+        }
+
+        function pauseAutoRefresh() {
+            if (autoRefreshIntervalId !== null) {
+                clearInterval(autoRefreshIntervalId);
+                autoRefreshIntervalId = null;
+                document.getElementById('refreshStatus').style.display = 'inline-block';
+            }
+        }
+
+        function resumeAutoRefresh() {
+            if (autoRefreshIntervalId === null) {
+                document.getElementById('refreshStatus').style.display = 'none';
+                // Start auto-refresh immediately and then every 10 seconds
+                autoRefreshIntervalId = setInterval(loadData, 10000);
             }
         }
 
@@ -667,8 +722,8 @@ const dashboardHTML = `<!DOCTYPE html>
         // Load data on page load
         loadData();
         
-        // Auto-refresh every 10 seconds
-        setInterval(loadData, 10000);
+        // Start auto-refresh every 10 seconds
+        autoRefreshIntervalId = setInterval(loadData, 10000);
     </script>
 </body>
 </html>
