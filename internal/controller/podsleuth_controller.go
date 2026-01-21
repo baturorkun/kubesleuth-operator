@@ -19,6 +19,7 @@ package controller
 import (
 	"context"
 	"fmt"
+	"sync"
 	"time"
 
 	appsv1 "k8s.io/api/apps/v1"
@@ -37,11 +38,26 @@ import (
 	infrav1alpha1 "github.com/baturorkun/kubebuilder-demo-operator/api/v1alpha1"
 )
 
+// CachedAnalysisResult represents a cached log analysis result for a pod
+type CachedAnalysisResult struct {
+	PodUID       types.UID
+	PodNamespace string
+	PodName      string
+	RestartCount int32
+	Result       *infrav1alpha1.LogAnalysisResult
+	CachedAt     time.Time
+	ExpiresAt    time.Time
+}
+
 // PodSleuthReconciler reconciles a PodSleuth object
 type PodSleuthReconciler struct {
 	client.Client
 	Scheme    *runtime.Scheme
 	K8sClient kubernetes.Interface
+
+	// Cache for log analysis results
+	analysisCache    map[string]*CachedAnalysisResult
+	analysisCacheMux sync.RWMutex
 }
 
 // +kubebuilder:rbac:groups=apps.ops.dev,resources=podsleuths,verbs=get;list;watch;create;update;patch;delete
@@ -127,11 +143,46 @@ func (r *PodSleuthReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 		// Perform log analysis if enabled and pod is running but not ready
 		if podSleuth.Spec.LogAnalysis != nil && podSleuth.Spec.LogAnalysis.Enabled {
 			if pod.Status.Phase == corev1.PodRunning {
-				// Only analyze logs for running pods that are not ready
-				logAnalysisResult, err := analyzeLogs(ctx, r.Client, r.K8sClient, &pod, podSleuth.Spec.LogAnalysis)
-				if err != nil {
-					logger.Info("log analysis failed", "pod", pod.Name, "namespace", pod.Namespace, "error", err)
-				} else if logAnalysisResult != nil {
+				// Get cache configuration
+				cacheTTL := 5 * time.Minute // default
+				if podSleuth.Spec.LogAnalysis.CacheTTL != nil {
+					cacheTTL = podSleuth.Spec.LogAnalysis.CacheTTL.Duration
+				}
+
+				cacheEnabled := true
+				if podSleuth.Spec.LogAnalysis.CacheEnabled != nil {
+					cacheEnabled = *podSleuth.Spec.LogAnalysis.CacheEnabled
+				}
+
+				var logAnalysisResult *infrav1alpha1.LogAnalysisResult
+
+				// Try to get cached result if caching is enabled
+				if cacheEnabled {
+					logAnalysisResult = r.getCachedAnalysis(&pod, cacheTTL)
+					if logAnalysisResult != nil {
+						logger.Info("using cached log analysis", "pod", pod.Name, "namespace", pod.Namespace, "cachedAt", logAnalysisResult.CachedAt, "methods", logAnalysisResult.Methods)
+					}
+				}
+
+				// If no cached result, perform analysis
+				if logAnalysisResult == nil {
+					result, err := analyzeLogs(ctx, r.Client, r.K8sClient, &pod, podSleuth.Spec.LogAnalysis)
+					if err != nil {
+						logger.Info("log analysis failed", "pod", pod.Name, "namespace", pod.Namespace, "error", err)
+					} else if result != nil {
+						logAnalysisResult = result
+						// Cache the result if caching is enabled
+						if cacheEnabled {
+							r.setCachedAnalysis(&pod, result, cacheTTL)
+							logger.Info("log analysis completed and cached", "pod", pod.Name, "namespace", pod.Namespace, "methods", result.Methods, "rootCause", result.RootCause, "confidence", result.Confidence, "cacheTTL", cacheTTL)
+						} else {
+							logger.Info("log analysis completed (no cache)", "pod", pod.Name, "namespace", pod.Namespace, "methods", result.Methods, "rootCause", result.RootCause, "confidence", result.Confidence)
+						}
+					}
+				}
+
+				// Use the analysis result (cached or fresh)
+				if logAnalysisResult != nil {
 					podInfo.LogAnalysis = logAnalysisResult
 					// Append log analysis findings to the message
 					if logAnalysisResult.RootCause != "" {
@@ -141,7 +192,6 @@ func (r *PodSleuthReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 							podInfo.Message = "Log analysis: " + logAnalysisResult.RootCause
 						}
 					}
-					logger.Info("log analysis completed", "pod", pod.Name, "namespace", pod.Namespace, "rootCause", logAnalysisResult.RootCause, "method", logAnalysisResult.Method, "confidence", logAnalysisResult.Confidence, "errorLines", len(logAnalysisResult.ErrorLines))
 				} else {
 					logger.Info("log analysis returned no results", "pod", pod.Name, "namespace", pod.Namespace)
 				}
@@ -162,6 +212,15 @@ func (r *PodSleuthReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 			"containerErrors", len(podInfo.ContainerErrors),
 		)
 	}
+
+	// Clean up cache for pods that are no longer in the non-ready list
+	currentPods := make(map[string]bool)
+	for _, pod := range podList.Items {
+		if !isPodReady(&pod) {
+			currentPods[getCacheKey(&pod)] = true
+		}
+	}
+	r.cleanupCache(currentPods)
 
 	// Update status
 	podSleuth.Status.NonReadyPods = nonReadyPods
@@ -391,6 +450,113 @@ func (r *PodSleuthReconciler) findObjectsForPod(ctx context.Context, pod client.
 	}
 
 	return requests
+}
+
+// getCacheKey generates a cache key for a pod based on UID and restart count
+func getCacheKey(pod *corev1.Pod) string {
+	// Get the highest restart count from all containers
+	maxRestartCount := int32(0)
+	for _, cs := range pod.Status.ContainerStatuses {
+		if cs.RestartCount > maxRestartCount {
+			maxRestartCount = cs.RestartCount
+		}
+	}
+	for _, cs := range pod.Status.InitContainerStatuses {
+		if cs.RestartCount > maxRestartCount {
+			maxRestartCount = cs.RestartCount
+		}
+	}
+
+	return fmt.Sprintf("%s/%s/%s/%d", pod.Namespace, pod.Name, pod.UID, maxRestartCount)
+}
+
+// isPodReady checks if a pod is ready
+func isPodReady(pod *corev1.Pod) bool {
+	for _, condition := range pod.Status.Conditions {
+		if condition.Type == corev1.PodReady {
+			return condition.Status == corev1.ConditionTrue
+		}
+	}
+	return false
+}
+
+// getCachedAnalysis retrieves a cached analysis result if it exists and hasn't expired
+func (r *PodSleuthReconciler) getCachedAnalysis(pod *corev1.Pod, cacheTTL time.Duration) *infrav1alpha1.LogAnalysisResult {
+	r.analysisCacheMux.RLock()
+	defer r.analysisCacheMux.RUnlock()
+
+	if r.analysisCache == nil {
+		return nil
+	}
+
+	cacheKey := getCacheKey(pod)
+	cached, exists := r.analysisCache[cacheKey]
+	if !exists {
+		return nil
+	}
+
+	// Check if cache has expired
+	if time.Now().After(cached.ExpiresAt) {
+		return nil
+	}
+
+	return cached.Result
+}
+
+// setCachedAnalysis stores an analysis result in the cache
+func (r *PodSleuthReconciler) setCachedAnalysis(pod *corev1.Pod, result *infrav1alpha1.LogAnalysisResult, cacheTTL time.Duration) {
+	r.analysisCacheMux.Lock()
+	defer r.analysisCacheMux.Unlock()
+
+	if r.analysisCache == nil {
+		r.analysisCache = make(map[string]*CachedAnalysisResult)
+	}
+
+	// Get the highest restart count
+	maxRestartCount := int32(0)
+	for _, cs := range pod.Status.ContainerStatuses {
+		if cs.RestartCount > maxRestartCount {
+			maxRestartCount = cs.RestartCount
+		}
+	}
+	for _, cs := range pod.Status.InitContainerStatuses {
+		if cs.RestartCount > maxRestartCount {
+			maxRestartCount = cs.RestartCount
+		}
+	}
+
+	cacheKey := getCacheKey(pod)
+	now := time.Now()
+
+	// Set CachedAt timestamp in the result
+	result.CachedAt = metav1.NewTime(now)
+
+	r.analysisCache[cacheKey] = &CachedAnalysisResult{
+		PodUID:       pod.UID,
+		PodNamespace: pod.Namespace,
+		PodName:      pod.Name,
+		RestartCount: maxRestartCount,
+		Result:       result,
+		CachedAt:     now,
+		ExpiresAt:    now.Add(cacheTTL),
+	}
+}
+
+// cleanupCache removes stale cache entries for pods that no longer exist or are ready
+func (r *PodSleuthReconciler) cleanupCache(currentPods map[string]bool) {
+	r.analysisCacheMux.Lock()
+	defer r.analysisCacheMux.Unlock()
+
+	if r.analysisCache == nil {
+		return
+	}
+
+	// Remove entries for pods that are no longer in the non-ready list
+	for key := range r.analysisCache {
+		if !currentPods[key] {
+			delete(r.analysisCache, key)
+		}
+	}
 }
 
 // SetupWithManager sets up the controller with the Manager.

@@ -1,0 +1,59 @@
+apiVersion: apps.ops.dev/v1alpha1
+kind: PodSleuth
+metadata:
+  name: podsleuth-dual-method
+  labels:
+    app.kubernetes.io/name: kubesleuth-operator
+    app.kubernetes.io/managed-by: kustomize
+spec:
+  # Reconcile every 5 minutes (default)
+  reconcileInterval: 5m
+
+  # Monitor all pods (no label selector)
+  # podLabelSelector:
+  #   matchLabels:
+  #     environment: production
+
+  # Log analysis with BOTH pattern and AI methods
+  logAnalysis:
+    enabled: true
+
+    # Methods are executed in the order specified
+    # Pattern analysis runs first (fast), AI analysis runs second (comprehensive)
+    # You can reorder to ["ai", "pattern"] if you prefer AI-first
+    methods: ["pattern", "ai"]
+
+    # Cache configuration - prevents re-analyzing the same pod on every reconcile
+    cacheEnabled: true
+    cacheTTL: 5m  # Cache results for 5 minutes
+
+    # Log retrieval configuration
+    linesToAnalyze: 100       # Fetch last 100 lines
+    filterErrorsOnly: true     # Only analyze error/warning lines
+
+    # Pattern analysis configuration (used when "pattern" in methods)
+    patterns:
+      - name: "KafkaConnectionError"
+        pattern: "(?i)(broker not available|kafka.*connection)"
+        rootCause: "Kafka service is down or unreachable"
+        priority: 15
+
+      - name: "DatabaseConnectionError"
+        pattern: "(?i)(connection pool exhausted|too many connections)"
+        rootCause: "Database connection pool exhausted"
+        priority: 12
+
+      - name: "ServiceTimeout"
+        pattern: "(?i)(timeout|timed out)"
+        rootCause: "Service timeout - backend may be slow"
+        priority: 10
+
+    # AI analysis configuration (used when "ai" in methods)
+    aiEndpoint: "https://api.openai.com/v1/chat/completions"
+    aiFormat: "openai"
+    aiModel: "gpt-4"
+    aiApiKey:
+      name: openai-api-key  # Secret name
+      key: api-key          # Key within the secret
+    aiAuthHeader: "Authorization"
+    aiAuthPrefix: "Bearer"

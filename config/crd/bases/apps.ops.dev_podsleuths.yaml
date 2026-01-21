@@ -45,7 +45,8 @@ spec:
                 properties:
                   aiApiKey:
                     description: |-
-                      AIAPIKey is the API key for AI analysis (required if method is "ai" and endpoint requires auth)
+                      AIAPIKey is the API key for AI analysis
+                      Deprecated: Use MethodConfigs with AIConfig instead
                       Should be stored as a Kubernetes Secret reference
                     properties:
                       key:
@@ -72,40 +73,46 @@ spec:
                   aiAuthHeader:
                     description: |-
                       AIAuthHeader specifies the HTTP header name for authentication
+                      Deprecated: Use MethodConfigs with AIConfig instead
                       Default: "Authorization"
                     type: string
                   aiAuthPrefix:
                     description: |-
                       AIAuthPrefix specifies the prefix for the auth header value (e.g., "Bearer", "ApiKey")
+                      Deprecated: Use MethodConfigs with AIConfig instead
                       Default: "Bearer"
                     type: string
                   aiEndpoint:
                     description: |-
-                      AIEndpoint is the URL endpoint for AI analysis (required if method is "ai")
+                      AIEndpoint is the URL endpoint for AI analysis (required if "ai" in methods)
+                      Deprecated: Use MethodConfigs with AIConfig instead for cleaner structure
                       Examples:
                         - OpenAI: "https://api.openai.com/v1/chat/completions"
-                        - OpenAI-compatible (Together AI, Groq, LocalAI, vLLM, etc.): "https://api.together.xyz/v1/chat/completions"
-                        - Anthropic: "https://api.anthropic.com/v1/messages"
-                        - Ollama: "http://localhost:11434/api/generate" or "http://ollama-service:11434/api/generate"
-                        - Custom: "https://your-ai-service.com/api/analyze"
+                        - Ollama: "http://localhost:11434/api/generate"
                     type: string
                   aiFormat:
                     description: |-
                       AIFormat specifies the API format to use: "openai", "anthropic", "ollama", or "generic"
-                      Default: "openai" (for maximum compatibility with OpenAI-compatible services)
-                      Use "openai" for OpenAI and OpenAI-compatible services (Together AI, Groq, LocalAI, vLLM, etc.)
+                      Deprecated: Use MethodConfigs with AIConfig instead
+                      Default: "openai"
                     type: string
                   aiModel:
                     description: |-
                       AIModel specifies the model name to use for AI analysis
-                      Examples:
-                        - OpenAI: "gpt-3.5-turbo", "gpt-4", "gpt-4-turbo"
-                        - Anthropic: "claude-3-haiku-20240307", "claude-3-opus-20240229"
-                        - Ollama: "llama2", "llama", "qwen", "mistral", etc.
-                      If not specified, defaults will be used based on the format:
-                        - OpenAI: "gpt-3.5-turbo"
-                        - Anthropic: "claude-3-haiku-20240307"
-                        - Ollama: "llama2"
+                      Deprecated: Use MethodConfigs with AIConfig instead
+                      Examples: "gpt-4", "qwen3:8b", "claude-3-opus"
+                    type: string
+                  cacheEnabled:
+                    description: |-
+                      CacheEnabled enables caching of analysis results to avoid re-analyzing on every reconcile
+                      Results are cached per pod (keyed by UID + restart count)
+                      Cache is invalidated when pod restarts or after TTL expires
+                      Default: true
+                    type: boolean
+                  cacheTTL:
+                    description: |-
+                      CacheTTL is the duration to cache analysis results before re-analyzing
+                      Default: 5m
                     type: string
                   enabled:
                     description: Enabled enables log analysis for non-ready pods
@@ -125,11 +132,147 @@ spec:
                   method:
                     description: |-
                       Method specifies the analysis method: "pattern" or "ai"
+                      Deprecated: Use Methods instead for multiple method support
                       Default: "pattern"
                     type: string
+                  methodConfigs:
+                    description: |-
+                      MethodConfigs defines method-specific configurations in order of execution
+                      This is the NEW PREFERRED way to configure log analysis methods.
+                      Each method has its own configuration block, avoiding parameter mixing.
+                      Example:
+                        methodConfigs:
+                          - type: "pattern"
+                            patternConfig:
+                              patterns: [...]
+                          - type: "ai"
+                            aiConfig:
+                              endpoint: "..."
+                              model: "..."
+                    items:
+                      description: MethodConfig defines configuration for a specific
+                        analysis method
+                      properties:
+                        aiConfig:
+                          description: AIConfig contains AI-specific configuration
+                            (used when type is "ai")
+                          properties:
+                            apiKeySecretRef:
+                              description: APIKeySecretRef references a secret containing
+                                the API key
+                              properties:
+                                key:
+                                  description: The key of the secret to select from.  Must
+                                    be a valid secret key.
+                                  type: string
+                                name:
+                                  default: ""
+                                  description: |-
+                                    Name of the referent.
+                                    This field is effectively required, but due to backwards compatibility is
+                                    allowed to be empty. Instances of this type with an empty value here are
+                                    almost certainly wrong.
+                                    More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/names/#names
+                                  type: string
+                                optional:
+                                  description: Specify whether the Secret or its key
+                                    must be defined
+                                  type: boolean
+                              required:
+                              - key
+                              type: object
+                              x-kubernetes-map-type: atomic
+                            authHeader:
+                              description: |-
+                                AuthHeader specifies the HTTP header name for authentication
+                                Default: "Authorization"
+                              type: string
+                            authPrefix:
+                              description: |-
+                                AuthPrefix specifies the prefix for the auth header value
+                                Default: "Bearer"
+                              type: string
+                            endpoint:
+                              description: |-
+                                Endpoint is the URL endpoint for AI analysis
+                                Examples:
+                                  - OpenAI: "https://api.openai.com/v1/chat/completions"
+                                  - Ollama: "http://localhost:11434/api/generate"
+                              type: string
+                            format:
+                              description: |-
+                                Format specifies the API format: "openai", "anthropic", "ollama", or "generic"
+                                Default: "openai"
+                              type: string
+                            model:
+                              description: |-
+                                Model specifies the model name to use
+                                Examples: "gpt-4", "qwen3:8b", "claude-3-opus"
+                              type: string
+                          required:
+                          - endpoint
+                          type: object
+                        patternConfig:
+                          description: PatternConfig contains pattern-specific configuration
+                            (used when type is "pattern")
+                          properties:
+                            patterns:
+                              description: |-
+                                Patterns defines custom error patterns for pattern matching
+                                If not specified, default patterns will be used
+                              items:
+                                description: ErrorPattern defines a pattern to match
+                                  error messages in logs
+                                properties:
+                                  name:
+                                    description: Name is a descriptive name for this
+                                      pattern (e.g., "KafkaConnectionError")
+                                    type: string
+                                  pattern:
+                                    description: Pattern is the regex pattern to match
+                                      against log lines
+                                    type: string
+                                  priority:
+                                    description: |-
+                                      Priority determines which pattern to use if multiple patterns match
+                                      Higher priority patterns are preferred. Default: 0
+                                    format: int32
+                                    type: integer
+                                  rootCause:
+                                    description: |-
+                                      RootCause is the root cause message to report when this pattern matches
+                                      If empty, the matched log line will be used as the root cause
+                                    type: string
+                                required:
+                                - name
+                                - pattern
+                                type: object
+                              type: array
+                          type: object
+                        type:
+                          description: 'Type specifies the analysis method type: "pattern"
+                            or "ai"'
+                          enum:
+                          - pattern
+                          - ai
+                          type: string
+                      required:
+                      - type
+                      type: object
+                    type: array
+                  methods:
+                    description: |-
+                      Methods specifies the analysis methods to run in order (e.g., ["pattern", "ai"])
+                      Methods are executed sequentially in the order specified
+                      Example: ["pattern", "ai"] runs pattern first, then AI
+                      Default: ["pattern"]
+                    items:
+                      type: string
+                    type: array
                   patterns:
                     description: |-
                       Patterns defines custom error patterns for pattern matching method
+                      Deprecated: Use MethodConfigs with PatternConfig instead for cleaner structure
                       If not specified, default patterns will be used (connection errors, service unavailable, etc.)
                       Each pattern should be a regex that matches error messages
                     items:
@@ -347,13 +490,38 @@ spec:
                       description: LogAnalysis contains results from log analysis
                         if enabled
                       properties:
+                        aiResult:
+                          description: AIResult contains AI-specific analysis details
+                          properties:
+                            confidence:
+                              description: Confidence is the confidence level (0-100)
+                                from AI analysis
+                              format: int32
+                              type: integer
+                            error:
+                              description: Error contains any error message if AI
+                                analysis failed
+                              type: string
+                            model:
+                              description: Model is the AI model used for analysis
+                              type: string
+                            rootCause:
+                              description: RootCause is the root cause identified
+                                by AI
+                              type: string
+                          type: object
                         analyzedAt:
                           description: AnalyzedAt is when the analysis was performed
                           format: date-time
                           type: string
+                        cachedAt:
+                          description: CachedAt is when the result was cached (if
+                            caching is enabled)
+                          format: date-time
+                          type: string
                         confidence:
                           description: Confidence is the confidence level (0-100)
-                            of the analysis
+                            of the analysis (merged from all methods)
                           format: int32
                           type: integer
                         errorLines:
@@ -362,12 +530,63 @@ spec:
                           items:
                             type: string
                           type: array
-                        method:
-                          description: 'Method used for analysis: "pattern" or "ai"'
+                        matchedPattern:
+                          description: |-
+                            MatchedPattern is the name of the pattern that matched (for pattern analysis)
+                            Used internally, prefer PatternResult.MatchedPattern
                           type: string
+                        method:
+                          description: |-
+                            Method used for analysis: "pattern" or "ai"
+                            Deprecated: Use Methods instead for multiple method support
+                          type: string
+                        methods:
+                          description: Methods used for analysis in execution order
+                            (e.g., ["pattern", "ai"])
+                          items:
+                            type: string
+                          type: array
+                        model:
+                          description: |-
+                            Model is the AI model used (for AI analysis)
+                            Used internally, prefer AIResult.Model
+                          type: string
+                        patternResult:
+                          description: PatternResult contains pattern-specific analysis
+                            details
+                          properties:
+                            confidence:
+                              description: Confidence is the confidence level (0-100)
+                                of the pattern match
+                              format: int32
+                              type: integer
+                            error:
+                              description: Error contains any error message if pattern
+                                analysis failed
+                              type: string
+                            matchedPattern:
+                              description: MatchedPattern is the name of the pattern
+                                that matched
+                              type: string
+                            priority:
+                              description: Priority is the priority of the matched
+                                pattern
+                              format: int32
+                              type: integer
+                            rootCause:
+                              description: RootCause is the root cause from pattern
+                                matching
+                              type: string
+                          type: object
+                        priority:
+                          description: |-
+                            Priority is the priority of the matched pattern (for pattern analysis)
+                            Used internally, prefer PatternResult.Priority
+                          format: int32
+                          type: integer
                         rootCause:
                           description: RootCause is the identified root cause from
-                            log analysis
+                            log analysis (merged from all methods)
                           type: string
                       type: object
                     message:

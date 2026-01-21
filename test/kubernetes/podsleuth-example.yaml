@@ -22,12 +22,22 @@ spec:
   # Log analysis configuration for test environment
   # Configured to detect Kafka connection errors from test5 (app5-deployment)
   # and Redis connection errors from test6 (app6-deployment)
+  # Methods are executed in order: pattern first (fast), then AI (comprehensive)
   logAnalysis:
     enabled: true
-    method: "pattern"
+
+    # Methods to run in order: pattern matching first, then AI analysis with Ollama
+    methods: ["pattern", "ai"]
+
+    # Cache configuration - prevents re-analyzing same logs on every reconcile
+    cacheEnabled: true
+    cacheTTL: 5m  # Cache results for 5 minutes
+
+    # Log retrieval configuration
     linesToAnalyze: 200
     filterErrorsOnly: true
-    # Custom patterns to match test5 and test6 deployment errors
+
+    # Pattern analysis configuration (used when "pattern" in methods)
     patterns:
       - name: "KafkaConnectionError"
         pattern: "(?i)(broker not available|leader not available|connection to node|kafka.*connection.*failed|kafka.*service.*down|kafka.*service.*unreachable)"
@@ -37,3 +47,10 @@ spec:
         pattern: "(?i)(redis.*connection.*refused|redis.*timeout|cannot connect to redis)"
         rootCause: "Redis service is down or unreachable"
         priority: 12
+
+    # AI analysis configuration (used when "ai" in methods)
+    # Ollama on localhost configuration
+    aiEndpoint: "http://localhost:11434/api/generate"
+    aiFormat: "ollama"
+    aiModel: "qwen3:8b"  # Using the model that exists in your Ollama (qwen3:8b)
+    # Ollama typically doesn't require authentication, so no aiApiKey needed

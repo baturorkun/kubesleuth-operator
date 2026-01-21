@@ -89,9 +89,29 @@ type LogAnalysisConfig struct {
 	Enabled bool `json:"enabled"`
 
 	// Method specifies the analysis method: "pattern" or "ai"
+	// Deprecated: Use Methods instead for multiple method support
 	// Default: "pattern"
 	// +optional
 	Method string `json:"method,omitempty"`
+
+	// Methods specifies the analysis methods to run in order (e.g., ["pattern", "ai"])
+	// Methods are executed sequentially in the order specified
+	// Example: ["pattern", "ai"] runs pattern first, then AI
+	// Default: ["pattern"]
+	// +optional
+	Methods []string `json:"methods,omitempty"`
+
+	// CacheEnabled enables caching of analysis results to avoid re-analyzing on every reconcile
+	// Results are cached per pod (keyed by UID + restart count)
+	// Cache is invalidated when pod restarts or after TTL expires
+	// Default: true
+	// +optional
+	CacheEnabled *bool `json:"cacheEnabled,omitempty"`
+
+	// CacheTTL is the duration to cache analysis results before re-analyzing
+	// Default: 5m
+	// +optional
+	CacheTTL *metav1.Duration `json:"cacheTTL,omitempty"`
 
 	// LinesToAnalyze is the number of recent log lines to fetch and analyze
 	// Default: 100
@@ -105,53 +125,120 @@ type LogAnalysisConfig struct {
 	FilterErrorsOnly *bool `json:"filterErrorsOnly,omitempty"`
 
 	// Patterns defines custom error patterns for pattern matching method
+	// Deprecated: Use MethodConfigs with PatternConfig instead for cleaner structure
 	// If not specified, default patterns will be used (connection errors, service unavailable, etc.)
 	// Each pattern should be a regex that matches error messages
 	// +optional
 	Patterns []ErrorPattern `json:"patterns,omitempty"`
 
-	// AIEndpoint is the URL endpoint for AI analysis (required if method is "ai")
+	// AIEndpoint is the URL endpoint for AI analysis (required if "ai" in methods)
+	// Deprecated: Use MethodConfigs with AIConfig instead for cleaner structure
 	// Examples:
 	//   - OpenAI: "https://api.openai.com/v1/chat/completions"
-	//   - OpenAI-compatible (Together AI, Groq, LocalAI, vLLM, etc.): "https://api.together.xyz/v1/chat/completions"
-	//   - Anthropic: "https://api.anthropic.com/v1/messages"
-	//   - Ollama: "http://localhost:11434/api/generate" or "http://ollama-service:11434/api/generate"
-	//   - Custom: "https://your-ai-service.com/api/analyze"
+	//   - Ollama: "http://localhost:11434/api/generate"
 	// +optional
 	AIEndpoint string `json:"aiEndpoint,omitempty"`
 
 	// AIFormat specifies the API format to use: "openai", "anthropic", "ollama", or "generic"
-	// Default: "openai" (for maximum compatibility with OpenAI-compatible services)
-	// Use "openai" for OpenAI and OpenAI-compatible services (Together AI, Groq, LocalAI, vLLM, etc.)
+	// Deprecated: Use MethodConfigs with AIConfig instead
+	// Default: "openai"
 	// +optional
 	AIFormat string `json:"aiFormat,omitempty"`
 
 	// AIModel specifies the model name to use for AI analysis
-	// Examples:
-	//   - OpenAI: "gpt-3.5-turbo", "gpt-4", "gpt-4-turbo"
-	//   - Anthropic: "claude-3-haiku-20240307", "claude-3-opus-20240229"
-	//   - Ollama: "llama2", "llama", "qwen", "mistral", etc.
-	// If not specified, defaults will be used based on the format:
-	//   - OpenAI: "gpt-3.5-turbo"
-	//   - Anthropic: "claude-3-haiku-20240307"
-	//   - Ollama: "llama2"
+	// Deprecated: Use MethodConfigs with AIConfig instead
+	// Examples: "gpt-4", "qwen3:8b", "claude-3-opus"
 	// +optional
 	AIModel string `json:"aiModel,omitempty"`
 
-	// AIAPIKey is the API key for AI analysis (required if method is "ai" and endpoint requires auth)
+	// AIAPIKey is the API key for AI analysis
+	// Deprecated: Use MethodConfigs with AIConfig instead
 	// Should be stored as a Kubernetes Secret reference
 	// +optional
 	AIAPIKey *corev1.SecretKeySelector `json:"aiApiKey,omitempty"`
 
 	// AIAuthHeader specifies the HTTP header name for authentication
+	// Deprecated: Use MethodConfigs with AIConfig instead
 	// Default: "Authorization"
 	// +optional
 	AIAuthHeader string `json:"aiAuthHeader,omitempty"`
 
 	// AIAuthPrefix specifies the prefix for the auth header value (e.g., "Bearer", "ApiKey")
+	// Deprecated: Use MethodConfigs with AIConfig instead
 	// Default: "Bearer"
 	// +optional
 	AIAuthPrefix string `json:"aiAuthPrefix,omitempty"`
+
+	// MethodConfigs defines method-specific configurations in order of execution
+	// This is the NEW PREFERRED way to configure log analysis methods.
+	// Each method has its own configuration block, avoiding parameter mixing.
+	// Example:
+	//   methodConfigs:
+	//     - type: "pattern"
+	//       patternConfig:
+	//         patterns: [...]
+	//     - type: "ai"
+	//       aiConfig:
+	//         endpoint: "..."
+	//         model: "..."
+	// +optional
+	MethodConfigs []MethodConfig `json:"methodConfigs,omitempty"`
+}
+
+// MethodConfig defines configuration for a specific analysis method
+type MethodConfig struct {
+	// Type specifies the analysis method type: "pattern" or "ai"
+	// +kubebuilder:validation:Enum=pattern;ai
+	Type string `json:"type"`
+
+	// PatternConfig contains pattern-specific configuration (used when type is "pattern")
+	// +optional
+	PatternConfig *PatternConfig `json:"patternConfig,omitempty"`
+
+	// AIConfig contains AI-specific configuration (used when type is "ai")
+	// +optional
+	AIConfig *AIConfig `json:"aiConfig,omitempty"`
+}
+
+// PatternConfig defines configuration for pattern-based analysis
+type PatternConfig struct {
+	// Patterns defines custom error patterns for pattern matching
+	// If not specified, default patterns will be used
+	// +optional
+	Patterns []ErrorPattern `json:"patterns,omitempty"`
+}
+
+// AIConfig defines configuration for AI-based analysis
+type AIConfig struct {
+	// Endpoint is the URL endpoint for AI analysis
+	// Examples:
+	//   - OpenAI: "https://api.openai.com/v1/chat/completions"
+	//   - Ollama: "http://localhost:11434/api/generate"
+	Endpoint string `json:"endpoint"`
+
+	// Format specifies the API format: "openai", "anthropic", "ollama", or "generic"
+	// Default: "openai"
+	// +optional
+	Format string `json:"format,omitempty"`
+
+	// Model specifies the model name to use
+	// Examples: "gpt-4", "qwen3:8b", "claude-3-opus"
+	// +optional
+	Model string `json:"model,omitempty"`
+
+	// APIKeySecretRef references a secret containing the API key
+	// +optional
+	APIKeySecretRef *corev1.SecretKeySelector `json:"apiKeySecretRef,omitempty"`
+
+	// AuthHeader specifies the HTTP header name for authentication
+	// Default: "Authorization"
+	// +optional
+	AuthHeader string `json:"authHeader,omitempty"`
+
+	// AuthPrefix specifies the prefix for the auth header value
+	// Default: "Bearer"
+	// +optional
+	AuthPrefix string `json:"authPrefix,omitempty"`
 }
 
 // ErrorPattern defines a pattern to match error messages in logs
@@ -173,22 +260,103 @@ type ErrorPattern struct {
 	Priority int32 `json:"priority,omitempty"`
 }
 
-// LogAnalysisResult contains results from log analysis
-type LogAnalysisResult struct {
-	// RootCause is the identified root cause from log analysis
+// PatternError contains detailed error information for a specific pattern
+type PatternError struct {
+	// PatternName is the name of the pattern
+	PatternName string `json:"patternName"`
+
+	// MatchedLine is the log line that matched the pattern
+	MatchedLine string `json:"matchedLine"`
+
+	// Reason is the reason why the pattern matched
+	Reason string `json:"reason"`
+
+	// Message is the detailed message explaining the pattern match
+	Message string `json:"message"`
+}
+
+// PatternAnalysisResult contains pattern-specific analysis results
+type PatternAnalysisResult struct {
+	// MatchedPattern is the name of the pattern that matched
+	MatchedPattern string `json:"matchedPattern,omitempty"`
+
+	// Priority is the priority of the matched pattern
+	Priority int32 `json:"priority,omitempty"`
+
+	// RootCause is the root cause from pattern matching
 	RootCause string `json:"rootCause,omitempty"`
 
-	// Confidence is the confidence level (0-100) of the analysis
+	// Confidence is the confidence level (0-100) of the pattern match
+	Confidence int32 `json:"confidence,omitempty"`
+
+	// Error contains any error message if pattern analysis failed
+	// +optional
+	Error string `json:"error,omitempty"`
+}
+
+// AIAnalysisResult contains AI-specific analysis results
+type AIAnalysisResult struct {
+	// Model is the AI model used for analysis
+	Model string `json:"model,omitempty"`
+
+	// RootCause is the root cause identified by AI
+	RootCause string `json:"rootCause,omitempty"`
+
+	// Confidence is the confidence level (0-100) from AI analysis
+	Confidence int32 `json:"confidence,omitempty"`
+
+	// Error contains any error message if AI analysis failed
+	// +optional
+	Error string `json:"error,omitempty"`
+}
+
+// LogAnalysisResult contains results from log analysis
+type LogAnalysisResult struct {
+	// RootCause is the identified root cause from log analysis (merged from all methods)
+	RootCause string `json:"rootCause,omitempty"`
+
+	// Confidence is the confidence level (0-100) of the analysis (merged from all methods)
 	Confidence int32 `json:"confidence,omitempty"`
 
 	// Method used for analysis: "pattern" or "ai"
+	// Deprecated: Use Methods instead for multiple method support
 	Method string `json:"method,omitempty"`
+
+	// Methods used for analysis in execution order (e.g., ["pattern", "ai"])
+	Methods []string `json:"methods,omitempty"`
+
+	// MatchedPattern is the name of the pattern that matched (for pattern analysis)
+	// Used internally, prefer PatternResult.MatchedPattern
+	// +optional
+	MatchedPattern string `json:"matchedPattern,omitempty"`
+
+	// Priority is the priority of the matched pattern (for pattern analysis)
+	// Used internally, prefer PatternResult.Priority
+	// +optional
+	Priority int32 `json:"priority,omitempty"`
+
+	// Model is the AI model used (for AI analysis)
+	// Used internally, prefer AIResult.Model
+	// +optional
+	Model string `json:"model,omitempty"`
+
+	// PatternResult contains pattern-specific analysis details
+	// +optional
+	PatternResult *PatternAnalysisResult `json:"patternResult,omitempty"`
+
+	// AIResult contains AI-specific analysis details
+	// +optional
+	AIResult *AIAnalysisResult `json:"aiResult,omitempty"`
 
 	// ErrorLines contains the error lines that led to this conclusion
 	ErrorLines []string `json:"errorLines,omitempty"`
 
 	// AnalyzedAt is when the analysis was performed
 	AnalyzedAt metav1.Time `json:"analyzedAt,omitempty"`
+
+	// CachedAt is when the result was cached (if caching is enabled)
+	// +optional
+	CachedAt metav1.Time `json:"cachedAt,omitempty"`
 }
 
 // NonReadyPodInfo contains information about a non-ready pod

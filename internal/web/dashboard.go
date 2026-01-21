@@ -110,6 +110,14 @@ const dashboardHTML = `<!DOCTYPE html>
             background: #ccc;
             cursor: not-allowed;
         }
+        @keyframes pulse {
+            0%, 100% {
+                opacity: 1;
+            }
+            50% {
+                opacity: 0.85;
+            }
+        }
         .status-indicator {
             display: inline-block;
             width: 8px;
@@ -547,12 +555,42 @@ const dashboardHTML = `<!DOCTYPE html>
                     }
                 }
                 
-                // Second line: Log analysis (if present) - at the bottom, small icon
-                if (logAnalysisMessage && logAnalysisMessage !== '') {
-                    const logAnalysisLine = document.createElement('div');
-                    logAnalysisLine.style.cssText = 'line-height: 1.4; padding-top: 4px;';
-                    logAnalysisLine.innerHTML = '<span style="color: #ff9800; font-size: 11px;">🔍</span> <span style="font-size: 12px; font-weight: 600; color: #ff9800;">Log analysis:</span> <span style="font-size: 12px; color: #333; font-weight: 500;">' + escapeHtml(logAnalysisMessage) + '</span>';
-                    messageCell.appendChild(logAnalysisLine);
+                // Second line: Log analysis clickable link (if present)
+                if (pod.logAnalysis && (pod.logAnalysis.patternResult || pod.logAnalysis.aiResult)) {
+                    const logAnalysisLink = document.createElement('div');
+                    logAnalysisLink.style.cssText = 'margin-top: 8px; padding: 8px; background: #fff3cd; border-left: 3px solid #ffc107; border-radius: 4px; cursor: pointer; transition: background 0.2s;';
+                    logAnalysisLink.onmouseover = function() { this.style.background = '#ffe69c'; };
+                    logAnalysisLink.onmouseout = function() { this.style.background = '#fff3cd'; };
+                    logAnalysisLink.onclick = function(e) {
+                        e.stopPropagation();
+                        toggleDetails(index);
+                        // Scroll to details after a short delay
+                        setTimeout(() => {
+                            const detailsRow = document.getElementById('details-' + index);
+                            if (detailsRow && detailsRow.classList.contains('expanded')) {
+                                detailsRow.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+                            }
+                        }, 100);
+                    };
+                    
+                    // Build summary
+                    let summaryParts = [];
+                    if (pod.logAnalysis.patternResult && pod.logAnalysis.patternResult.rootCause) {
+                        summaryParts.push('Pattern: ' + pod.logAnalysis.patternResult.matchedPattern);
+                    }
+                    if (pod.logAnalysis.aiResult && pod.logAnalysis.aiResult.rootCause) {
+                        summaryParts.push('AI: ' + pod.logAnalysis.aiResult.model);
+                    }
+                    
+                    logAnalysisLink.innerHTML = '<div style="display: flex; align-items: center; gap: 8px;">' +
+                        '<span style="font-size: 16px;">🔍</span>' +
+                        '<div style="flex: 1;">' +
+                        '<strong style="color: #856404; font-size: 13px;">Log analysis found something. Click here to view it.</strong>' +
+                        (summaryParts.length > 0 ? '<div style="font-size: 11px; color: #856404; margin-top: 2px;">(' + summaryParts.join(' • ') + ')</div>' : '') +
+                        '</div>' +
+                        '</div>';
+                    
+                    messageCell.appendChild(logAnalysisLink);
                 }
                 
                 // Details row - show if has details or log analysis
@@ -667,39 +705,105 @@ const dashboardHTML = `<!DOCTYPE html>
                 html += '</div>';
             }
             
-            // Log Analysis - Make it prominent and visible
-            if (pod.logAnalysis && pod.logAnalysis.rootCause) {
+            // Log Analysis - Always Visible in Details
+            if (pod.logAnalysis && (pod.logAnalysis.patternResult || pod.logAnalysis.aiResult)) {
                 html += '<div class="details-section" style="border-top: 3px solid #ffc107; padding-top: 16px; margin-top: 16px;">';
-                html += '<h4 style="color: #856404; font-size: 16px; margin-bottom: 12px;">🔍 Log Analysis - Root Cause Identified</h4>';
-                html += '<div class="container-error" style="background: #fff3cd; border-left: 4px solid #ffc107; padding: 12px;">';
-                html += '<div class="container-error-detail" style="font-size: 15px; color: #856404; font-weight: 700; margin-bottom: 8px;">' + escapeHtml(pod.logAnalysis.rootCause) + '</div>';
+                html += '<h4 style="color: #856404; font-size: 16px; margin-bottom: 12px;">🔍 Log Analysis Results</h4>';
                 
-                if (pod.logAnalysis.confidence !== null && pod.logAnalysis.confidence !== undefined) {
-                    html += '<div class="container-error-detail"><strong>Confidence:</strong> ' + pod.logAnalysis.confidence + '%</div>';
-                }
+                // Common Log Analysis Information (MOVED TO TOP)
+                html += '<div class="details-section" style="background: #f8f9fa; padding: 12px; border-radius: 4px; margin-bottom: 16px;">';
                 
-                if (pod.logAnalysis.method) {
-                    html += '<div class="container-error-detail"><strong>Method:</strong> ' + pod.logAnalysis.method + '</div>';
+                if (pod.logAnalysis.methods && pod.logAnalysis.methods.length > 0) {
+                    html += '<div class="container-error-detail" style="margin-bottom: 4px;"><strong>Methods Used:</strong> ' + pod.logAnalysis.methods.join(', ') + '</div>';
                 }
                 
                 if (pod.logAnalysis.analyzedAt) {
                     const analyzedDate = new Date(pod.logAnalysis.analyzedAt);
-                    html += '<div class="container-error-detail"><strong>Analyzed At:</strong> ' + analyzedDate.toLocaleString() + '</div>';
+                    html += '<div class="container-error-detail" style="margin-bottom: 4px;"><strong>Analyzed At:</strong> ' + analyzedDate.toLocaleString() + '</div>';
                 }
                 
-                if (pod.logAnalysis.errorLines && pod.logAnalysis.errorLines.length > 0) {
-                    html += '<div class="container-error-detail" style="margin-top: 8px;"><strong>Error Lines (' + pod.logAnalysis.errorLines.length + '):</strong></div>';
-                    html += '<div style="background: #f8f9fa; padding: 8px; border-radius: 4px; margin-top: 4px; max-height: 200px; overflow-y: auto; font-family: monospace; font-size: 11px;">';
-                    pod.logAnalysis.errorLines.slice(0, 20).forEach(line => {
-                        html += '<div style="margin: 2px 0; color: #721c24;">' + escapeHtml(line) + '</div>';
-                    });
-                    if (pod.logAnalysis.errorLines.length > 20) {
-                        html += '<div style="color: #666; font-style: italic;">... and ' + (pod.logAnalysis.errorLines.length - 20) + ' more lines</div>';
-                    }
-                    html += '</div>';
+                if (pod.logAnalysis.cachedAt) {
+                    const cachedDate = new Date(pod.logAnalysis.cachedAt);
+                    html += '<div class="container-error-detail"><strong>Cached At:</strong> ' + cachedDate.toLocaleString() + ' <span style="color: #28a745; font-weight: 600;">✓ Cached</span></div>';
                 }
                 
                 html += '</div>';
+                
+                // Pattern Analysis
+                if (pod.logAnalysis.patternResult) {
+                    html += '<div class="details-section" style="border-top: 2px solid #17a2b8; padding-top: 12px; margin-top: 12px;">';
+                    html += '<h4 style="color: #0c5460; font-size: 16px; margin-bottom: 12px;">🔍 Pattern Analysis</h4>';
+                    
+                    if (pod.logAnalysis.patternResult.error) {
+                        html += '<div class="container-error" style="background: #f8d7da; border-left: 4px solid #dc3545; padding: 12px;">';
+                        html += '<div style="display: flex; align-items: center; gap: 8px; margin-bottom: 8px;">';
+                        html += '<span style="font-size: 24px;">⚠️</span>';
+                        html += '<strong style="color: #721c24; font-size: 16px;">Pattern Analysis Failed</strong>';
+                        html += '</div>';
+                        html += '<div class="container-error-detail" style="font-size: 14px; color: #721c24; font-family: monospace; background: #fff; padding: 8px; border-radius: 4px;">' + escapeHtml(pod.logAnalysis.patternResult.error) + '</div>';
+                        html += '</div>';
+                    } else {
+                        html += '<div class="container-error" style="background: #d1ecf1; border-left: 4px solid #17a2b8; padding: 12px;">';
+                        
+                        if (pod.logAnalysis.patternResult.rootCause) {
+                            html += '<div class="container-error-detail" style="font-size: 15px; color: #0c5460; font-weight: 700; margin-bottom: 8px;">' + escapeHtml(pod.logAnalysis.patternResult.rootCause) + '</div>';
+                        }
+                        
+                        if (pod.logAnalysis.patternResult.matchedPattern) {
+                            html += '<div class="container-error-detail"><strong>Matched Pattern:</strong> ' + escapeHtml(pod.logAnalysis.patternResult.matchedPattern) + '</div>';
+                        }
+                        
+                        if (pod.logAnalysis.patternResult.confidence !== null && pod.logAnalysis.patternResult.confidence !== undefined) {
+                            html += '<div class="container-error-detail"><strong>Confidence:</strong> ' + pod.logAnalysis.patternResult.confidence + '%</div>';
+                        }
+                        
+                        if (pod.logAnalysis.patternResult.priority !== null && pod.logAnalysis.patternResult.priority !== undefined) {
+                            html += '<div class="container-error-detail"><strong>Priority:</strong> ' + pod.logAnalysis.patternResult.priority + '</div>';
+                        }
+                        
+                        html += '</div>';
+                    }
+                    
+                    html += '</div>';
+                }
+                
+                // AI Analysis
+                if (pod.logAnalysis.aiResult) {
+                    html += '<div class="details-section" style="border-top: 2px solid #6f42c1; padding-top: 12px; margin-top: 12px;">';
+                    html += '<h4 style="color: #4c2a85; font-size: 16px; margin-bottom: 12px;">🤖 AI Analysis</h4>';
+                    
+                    if (pod.logAnalysis.aiResult.error) {
+                        html += '<div class="container-error" style="background: #f8d7da; border-left: 4px solid #dc3545; padding: 12px; animation: pulse 2s ease-in-out infinite;">';
+                        html += '<div style="display: flex; align-items: center; gap: 8px; margin-bottom: 8px;">';
+                        html += '<span style="font-size: 24px;">❌</span>';
+                        html += '<strong style="color: #721c24; font-size: 16px;">AI Analysis Failed</strong>';
+                        html += '</div>';
+                        html += '<div class="container-error-detail" style="font-size: 14px; color: #721c24; font-family: monospace; background: #fff; padding: 8px; border-radius: 4px; white-space: pre-wrap;">' + escapeHtml(pod.logAnalysis.aiResult.error) + '</div>';
+                        html += '<div style="margin-top: 8px; padding: 8px; background: #fff3cd; border-radius: 4px; font-size: 12px; color: #856404;">';
+                        html += '💡 <strong>Tip:</strong> Check your AI configuration (model name, endpoint, API key)';
+                        html += '</div>';
+                        html += '</div>';
+                    } else {
+                        html += '<div class="container-error" style="background: #e7e3f4; border-left: 4px solid #6f42c1; padding: 12px;">';
+                        
+                        if (pod.logAnalysis.aiResult.rootCause) {
+                            html += '<div class="container-error-detail" style="font-size: 15px; color: #4c2a85; font-weight: 700; margin-bottom: 8px;">' + escapeHtml(pod.logAnalysis.aiResult.rootCause) + '</div>';
+                        }
+                        
+                        if (pod.logAnalysis.aiResult.model) {
+                            html += '<div class="container-error-detail"><strong>Model:</strong> ' + escapeHtml(pod.logAnalysis.aiResult.model) + '</div>';
+                        }
+                        
+                        if (pod.logAnalysis.aiResult.confidence !== null && pod.logAnalysis.aiResult.confidence !== undefined) {
+                            html += '<div class="container-error-detail"><strong>Confidence:</strong> ' + pod.logAnalysis.aiResult.confidence + '%</div>';
+                        }
+                        
+                        html += '</div>';
+                    }
+                    
+                    html += '</div>';
+                }
+                
                 html += '</div>';
             }
             
@@ -712,6 +816,7 @@ const dashboardHTML = `<!DOCTYPE html>
             div.textContent = text;
             return div.innerHTML;
         }
+
 
         function updateLastUpdate() {
             const now = new Date();

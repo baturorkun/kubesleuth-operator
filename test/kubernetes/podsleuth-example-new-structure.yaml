@@ -1,0 +1,51 @@
+apiVersion: apps.ops.dev/v1alpha1
+kind: PodSleuth
+metadata:
+  name: podsleuth-test-new-structure
+spec:
+  # Reconcile interval (optional, default: 5 minutes)
+  reconcileInterval: 5m
+
+  # Pod label selector to filter test pods
+  podLabelSelector:
+    matchLabels:
+      environment: test
+
+  # NEW IMPROVED STRUCTURE - Method-specific configurations
+  # No more parameter mixing! Each method has its own config block.
+  logAnalysis:
+    enabled: true
+
+    # Common configuration (applies to all methods)
+    cacheEnabled: true
+    cacheTTL: 5m
+    linesToAnalyze: 200
+    filterErrorsOnly: true
+
+    # Method-specific configurations (RECOMMENDED NEW WAY)
+    methodConfigs:
+      # Pattern analysis method
+      - type: "pattern"
+        patternConfig:
+          patterns:
+            - name: "KafkaConnectionError"
+              pattern: "(?i)(broker not available|leader not available|connection to node|kafka.*connection.*failed|kafka.*service.*down|kafka.*service.*unreachable)"
+              rootCause: "Kafka service is down or unreachable"
+              priority: 15
+            - name: "RedisConnectionError"
+              pattern: "(?i)(redis.*connection.*refused|redis.*timeout|cannot connect to redis)"
+              rootCause: "Redis service is down or unreachable"
+              priority: 12
+
+      # AI analysis method
+      - type: "ai"
+        aiConfig:
+          endpoint: "http://localhost:11434/api/generate"
+          format: "ollama"
+          model: "qwen3:8b"
+          # Optional: API key (if your AI service requires authentication)
+          # apiKeySecretRef:
+          #   name: "ollama-api-key-secret"
+          #   key: "api-key"
+          # authHeader: "Authorization"
+          # authPrefix: "Bearer"

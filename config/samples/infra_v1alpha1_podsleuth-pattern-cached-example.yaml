@@ -1,0 +1,45 @@
+apiVersion: apps.ops.dev/v1alpha1
+kind: PodSleuth
+metadata:
+  name: podsleuth-pattern-cached
+  labels:
+    app.kubernetes.io/name: kubesleuth-operator
+    app.kubernetes.io/managed-by: kustomize
+spec:
+  reconcileInterval: 5m
+
+  # Log analysis with pattern method only (fast, no external dependencies)
+  logAnalysis:
+    enabled: true
+
+    # Single method: pattern analysis only
+    methods: ["pattern"]
+
+    # Cache configuration - results cached for 5 minutes
+    cacheEnabled: true
+    cacheTTL: 5m
+
+    linesToAnalyze: 100
+    filterErrorsOnly: true
+
+    # Custom patterns for your specific use case
+    patterns:
+      - name: "KafkaConnectionError"
+        pattern: "(?i)(broker not available|leader not available|connection to node)"
+        rootCause: "Kafka service is down or unreachable"
+        priority: 15
+
+      - name: "DatabaseConnectionError"
+        pattern: "(?i)(connection pool exhausted|too many connections|database.*connection.*failed)"
+        rootCause: "Database connection failed - connection pool may be exhausted"
+        priority: 12
+
+      - name: "ServiceUnavailable"
+        pattern: "(?i)(service unavailable|503|connection refused)"
+        rootCause: "Service unavailable - backend service is down or overloaded"
+        priority: 10
+
+      - name: "DNSError"
+        pattern: "(?i)(no such host|name resolution failed|dns error|unknown host)"
+        rootCause: "DNS resolution failed - service name cannot be resolved"
+        priority: 10

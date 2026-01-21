@@ -114,13 +114,24 @@ func getDefaultPatterns() []DefaultPattern {
 	return patterns
 }
 
-// analyzeLogs performs log analysis using the configured method
+// analyzeLogs performs log analysis using the configured method(s)
 func analyzeLogs(ctx context.Context, client client.Client, k8sClient kubernetes.Interface, pod *corev1.Pod, config *infrav1alpha1.LogAnalysisConfig) (*infrav1alpha1.LogAnalysisResult, error) {
 	if config == nil || !config.Enabled {
 		return nil, nil
 	}
 
-	// Get log lines
+	// Determine methods to use (backward compatibility)
+	methods := config.Methods
+	if len(methods) == 0 && config.Method != "" {
+		// Support deprecated single Method field
+		methods = []string{config.Method}
+	}
+	if len(methods) == 0 {
+		// Default to pattern method
+		methods = []string{"pattern"}
+	}
+
+	// Get log lines once (shared by all methods)
 	logLines, err := getPodLogs(ctx, k8sClient, pod, config)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get pod logs: %w", err)
@@ -130,33 +141,129 @@ func analyzeLogs(ctx context.Context, client client.Client, k8sClient kubernetes
 		return nil, nil
 	}
 
-	// Determine method (default to pattern)
-	method := config.Method
-	if method == "" {
-		method = "pattern"
+	logger := log.Log.WithName("log-analysis")
+	logger.Info("starting multi-method log analysis", "pod", pod.Name, "namespace", pod.Namespace, "methods", methods, "logLines", len(logLines))
+
+	var patternResult *infrav1alpha1.PatternAnalysisResult
+	var aiResult *infrav1alpha1.AIAnalysisResult
+	var errorLines []string
+
+	// Run each method in order
+	for i, method := range methods {
+		logger.Info("running analysis method", "method", method, "order", i+1, "total", len(methods))
+
+		switch method {
+		case "pattern":
+			result, err := analyzeWithPatterns(logLines, config)
+			if err != nil {
+				logger.Error(err, "pattern analysis failed")
+				// Store error in result for UI display
+				patternResult = &infrav1alpha1.PatternAnalysisResult{
+					Error: fmt.Sprintf("Pattern analysis failed: %v", err),
+				}
+			} else if result != nil {
+				patternResult = &infrav1alpha1.PatternAnalysisResult{
+					MatchedPattern: result.MatchedPattern,
+					Priority:       result.Priority,
+					RootCause:      result.RootCause,
+					Confidence:     result.Confidence,
+				}
+				// Collect error lines
+				errorLines = append(errorLines, result.ErrorLines...)
+				logger.Info("pattern analysis completed", "matchedPattern", result.MatchedPattern, "confidence", result.Confidence)
+			}
+
+		case "ai":
+			result, err := analyzeWithAI(ctx, client, logLines, pod, config)
+			if err != nil {
+				logger.Error(err, "AI analysis failed")
+				// Store error in result for UI display
+				aiResult = &infrav1alpha1.AIAnalysisResult{
+					Error: fmt.Sprintf("AI analysis failed: %v", err),
+				}
+			} else if result != nil {
+				aiResult = &infrav1alpha1.AIAnalysisResult{
+					Model:      result.Model,
+					RootCause:  result.RootCause,
+					Confidence: result.Confidence,
+				}
+				// Collect error lines
+				errorLines = append(errorLines, result.ErrorLines...)
+				logger.Info("AI analysis completed", "model", result.Model, "confidence", result.Confidence)
+			}
+
+		default:
+			logger.Info("unknown analysis method, skipping", "method", method)
+		}
 	}
 
-	var result *infrav1alpha1.LogAnalysisResult
-
-	switch method {
-	case "pattern":
-		result, err = analyzeWithPatterns(logLines, config)
-	case "ai":
-		result, err = analyzeWithAI(ctx, client, logLines, pod, config)
-	default:
-		return nil, fmt.Errorf("unknown analysis method: %s", method)
+	// Merge results from all methods
+	finalResult := mergeAnalysisResults(patternResult, aiResult, methods, errorLines)
+	if finalResult != nil {
+		finalResult.AnalyzedAt = metav1.Now()
+		logger.Info("multi-method analysis completed", "methods", finalResult.Methods, "rootCause", finalResult.RootCause, "confidence", finalResult.Confidence)
 	}
 
-	if err != nil {
-		return nil, err
+	return finalResult, nil
+}
+
+// mergeAnalysisResults combines results from multiple analysis methods
+func mergeAnalysisResults(patternResult *infrav1alpha1.PatternAnalysisResult, aiResult *infrav1alpha1.AIAnalysisResult, methods []string, errorLines []string) *infrav1alpha1.LogAnalysisResult {
+	result := &infrav1alpha1.LogAnalysisResult{
+		Methods:       methods,
+		PatternResult: patternResult,
+		AIResult:      aiResult,
+		ErrorLines:    deduplicateLines(errorLines),
 	}
 
-	if result != nil {
-		result.Method = method
-		result.AnalyzedAt = metav1.Now()
+	// Determine primary root cause and confidence based on available results
+	if aiResult != nil && patternResult != nil {
+		// Both methods ran
+		if aiResult.Confidence > 80 {
+			// High AI confidence - use AI as primary
+			result.RootCause = aiResult.RootCause
+			result.Confidence = aiResult.Confidence
+			result.Method = "ai" // For backward compatibility
+		} else if aiResult.Confidence < 50 {
+			// Low AI confidence - use pattern as primary
+			result.RootCause = patternResult.RootCause
+			result.Confidence = patternResult.Confidence
+			result.Method = "pattern" // For backward compatibility
+		} else {
+			// Medium AI confidence - combine both
+			result.RootCause = fmt.Sprintf("[Pattern] %s | [AI] %s", patternResult.RootCause, aiResult.RootCause)
+			result.Confidence = (patternResult.Confidence + aiResult.Confidence) / 2
+			result.Method = "pattern+ai" // For backward compatibility
+		}
+	} else if aiResult != nil {
+		// Only AI ran
+		result.RootCause = aiResult.RootCause
+		result.Confidence = aiResult.Confidence
+		result.Method = "ai" // For backward compatibility
+	} else if patternResult != nil {
+		// Only pattern ran
+		result.RootCause = patternResult.RootCause
+		result.Confidence = patternResult.Confidence
+		result.Method = "pattern" // For backward compatibility
+	} else {
+		// No results
+		return nil
 	}
 
-	return result, nil
+	return result
+}
+
+// deduplicateLines removes duplicate lines from a slice
+func deduplicateLines(lines []string) []string {
+	seen := make(map[string]bool)
+	result := []string{}
+	for _, line := range lines {
+		if !seen[line] {
+			seen[line] = true
+			result = append(result, line)
+		}
+	}
+	return result
 }
 
 // getPodLogs retrieves logs from a pod container
@@ -357,9 +464,11 @@ func analyzeWithPatterns(logLines []string, config *infrav1alpha1.LogAnalysisCon
 		// No pattern matched, return generic result
 		if len(logLines) > 0 {
 			return &infrav1alpha1.LogAnalysisResult{
-				RootCause:  "Unknown error detected in logs",
-				Confidence: 30,
-				ErrorLines: logLines[:min(10, len(logLines))], // Return first 10 lines
+				RootCause:      "Unknown error detected in logs",
+				Confidence:     30,
+				ErrorLines:     logLines[:min(10, len(logLines))], // Return first 10 lines
+				MatchedPattern: "",
+				Priority:       0,
 			}, nil
 		}
 		return nil, nil
@@ -380,9 +489,11 @@ func analyzeWithPatterns(logLines []string, config *infrav1alpha1.LogAnalysisCon
 	}
 
 	return &infrav1alpha1.LogAnalysisResult{
-		RootCause:  rootCause,
-		Confidence: confidence,
-		ErrorLines: matchedLines,
+		RootCause:      rootCause,
+		Confidence:     confidence,
+		ErrorLines:     matchedLines,
+		MatchedPattern: bestMatch.Name,
+		Priority:       bestMatch.Priority,
 	}, nil
 }
 
@@ -617,7 +728,7 @@ func parseAIResponse(body io.Reader, endpoint string, format string) (*infrav1al
 	}
 
 	var rootCause string
-	confidence := int32(70) // Default confidence for AI analysis
+	var confidence int32
 
 	// Determine format: use explicit format if set, otherwise auto-detect from endpoint
 	apiFormat := format
@@ -680,12 +791,102 @@ func parseAIResponse(body io.Reader, endpoint string, format string) (*infrav1al
 		// Fallback: return raw response as string
 		rootCause = fmt.Sprintf("AI analysis completed (response format not recognized): %s", string(bodyBytes))
 		confidence = 50
+	} else {
+		// Calculate dynamic confidence based on response quality
+		confidence = calculateAIConfidence(rootCause)
+	}
+
+	// Try to extract model from response
+	model := ""
+	if modelField, ok := response["model"].(string); ok {
+		model = modelField
 	}
 
 	return &infrav1alpha1.LogAnalysisResult{
 		RootCause:  rootCause,
 		Confidence: confidence,
+		Model:      model,
 	}, nil
+}
+
+// calculateAIConfidence calculates confidence score based on AI response quality
+func calculateAIConfidence(rootCause string) int32 {
+	confidence := int32(60) // Base confidence
+
+	// Factor 1: Response length (detailed responses are more confident)
+	length := len(rootCause)
+	if length > 200 {
+		confidence += 20 // Very detailed
+	} else if length > 100 {
+		confidence += 15 // Detailed
+	} else if length > 50 {
+		confidence += 10 // Moderate detail
+	} else if length < 20 {
+		confidence -= 20 // Too short, likely incomplete
+	}
+
+	// Factor 2: Check for uncertainty indicators (reduce confidence)
+	uncertainWords := []string{
+		"might", "maybe", "possibly", "perhaps", "unclear",
+		"not sure", "could be", "may be", "unsure", "uncertain",
+		"difficult to determine", "hard to say",
+	}
+	lowerRootCause := strings.ToLower(rootCause)
+	for _, word := range uncertainWords {
+		if strings.Contains(lowerRootCause, word) {
+			confidence -= 15
+			break // Only penalize once for uncertainty
+		}
+	}
+
+	// Factor 3: Check for certainty indicators (increase confidence)
+	certaintyWords := []string{
+		"error:", "failed:", "exception:", "timeout:", "connection refused",
+		"out of memory", "disk full", "permission denied", "not found",
+		"crashed", "terminated", "killed", "panic:", "fatal:",
+	}
+	certaintyCount := 0
+	for _, word := range certaintyWords {
+		if strings.Contains(lowerRootCause, word) {
+			certaintyCount++
+		}
+	}
+	if certaintyCount > 0 {
+		confidence += int32(certaintyCount * 5) // +5 per certainty indicator, max +15
+		if confidence > 100 {
+			confidence = 100
+		}
+	}
+
+	// Factor 4: Structured format (bullet points, line numbers, clear structure)
+	structureIndicators := []string{"\n-", "\n*", "\n1.", "\n2.", "line ", "at line", "error at"}
+	for _, indicator := range structureIndicators {
+		if strings.Contains(lowerRootCause, indicator) {
+			confidence += 8
+			break // Only add once for structure
+		}
+	}
+
+	// Factor 5: Check if response contains actual analysis vs generic statements
+	genericPhrases := []string{
+		"i cannot", "i can't", "i don't have", "no information",
+		"please provide", "need more", "insufficient",
+	}
+	for _, phrase := range genericPhrases {
+		if strings.Contains(lowerRootCause, phrase) {
+			confidence -= 25 // Significant reduction for non-answers
+			break
+		}
+	}
+
+	// Ensure confidence stays within valid range (0-100)
+	if confidence > 100 {
+		confidence = 100
+	} else if confidence < 10 {
+		confidence = 10 // Minimum confidence (always give some credit)
+	}
+
+	return confidence
 }
 
 // min returns the minimum of two integers
