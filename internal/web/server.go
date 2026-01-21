@@ -21,6 +21,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"strings"
 	"time"
 
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -53,6 +54,7 @@ func (s *Server) Start(ctx context.Context) error {
 	// API endpoints
 	mux.HandleFunc("/api/podsleuths", s.handleListPodSleuths)
 	mux.HandleFunc("/api/podsleuths/", s.handleGetPodSleuth)
+	mux.HandleFunc("/api/force-refresh", s.handleForceRefresh) // Restored for manual analysis trigger
 
 	server := &http.Server{
 		Addr:    s.port,
@@ -80,18 +82,30 @@ func (s *Server) Start(ctx context.Context) error {
 
 // handleDashboard serves the HTML dashboard
 func (s *Server) handleDashboard(w http.ResponseWriter, r *http.Request) {
+	// Prevent browser caching - always serve fresh dashboard
+	w.Header().Set("Cache-Control", "no-cache, no-store, must-revalidate, max-age=0")
+	w.Header().Set("Pragma", "no-cache")
+	w.Header().Set("Expires", "Thu, 01 Jan 1970 00:00:00 GMT")
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	fmt.Fprint(w, dashboardHTML)
 }
 
 // handleListPodSleuths returns all PodSleuth resources as JSON
 func (s *Server) handleListPodSleuths(w http.ResponseWriter, r *http.Request) {
+	// Prevent browser caching for API calls
+	w.Header().Set("Cache-Control", "no-cache, no-store, must-revalidate, max-age=0")
+	w.Header().Set("Pragma", "no-cache")
+	w.Header().Set("Expires", "0")
+	w.Header().Set("Content-Type", "application/json")
+
 	var podSleuthList infrav1alpha1.PodSleuthList
 	if err := s.client.List(r.Context(), &podSleuthList); err != nil {
 		http.Error(w, fmt.Sprintf("Error listing PodSleuth: %v", err), http.StatusInternalServerError)
 		return
 	}
 
+	// Prevent caching of API responses
+	w.Header().Set("Cache-Control", "no-cache, no-store, must-revalidate")
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(podSleuthList)
 }
@@ -110,6 +124,69 @@ func (s *Server) handleGetPodSleuth(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Prevent caching of API responses
+	w.Header().Set("Cache-Control", "no-cache, no-store, must-revalidate")
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(podSleuth)
+}
+
+// handleForceRefresh forces cache refresh by adding annotation to PodSleuths
+// Accepts optional JSON body: {"podName":"...","podNamespace":"..."}
+// If provided, only that pod will bypass cache; otherwise all pods are refreshed.
+type forceRefreshRequest struct {
+	PodName      string `json:"podName"`
+	PodNamespace string `json:"podNamespace"`
+}
+
+func (s *Server) handleForceRefresh(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	var reqBody forceRefreshRequest
+	_ = json.NewDecoder(r.Body).Decode(&reqBody) // best-effort; ignore errors for empty body
+	targetPod := ""
+	if reqBody.PodName != "" && reqBody.PodNamespace != "" {
+		targetPod = fmt.Sprintf("%s/%s", strings.TrimSpace(reqBody.PodNamespace), strings.TrimSpace(reqBody.PodName))
+	}
+
+	var podSleuthList infrav1alpha1.PodSleuthList
+	if err := s.client.List(r.Context(), &podSleuthList); err != nil {
+		http.Error(w, fmt.Sprintf("Error listing PodSleuth: %v", err), http.StatusInternalServerError)
+		return
+	}
+
+	log.Log.Info("force-refresh request received", "targetPod", targetPod)
+
+	updatedCount := 0
+	for i := range podSleuthList.Items {
+		ps := &podSleuthList.Items[i]
+
+		if ps.Annotations == nil {
+			ps.Annotations = make(map[string]string)
+		}
+
+		if targetPod != "" {
+			ps.Annotations["kubesleuth.io/force-refresh-pod"] = targetPod
+		} else {
+			ps.Annotations["kubesleuth.io/force-refresh"] = time.Now().Format(time.RFC3339)
+		}
+
+		if err := s.client.Update(r.Context(), ps); err != nil {
+			log.Log.Error(err, "Failed to update PodSleuth with force-refresh annotation", "name", ps.Name)
+			continue
+		}
+		updatedCount++
+
+		log.Log.Info("force-refresh annotation applied", "podSleuth", ps.Name, "targetPod", targetPod)
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"success":   true,
+		"message":   fmt.Sprintf("Force refresh triggered for %d PodSleuth resources", updatedCount),
+		"count":     updatedCount,
+		"targetPod": targetPod,
+	})
 }

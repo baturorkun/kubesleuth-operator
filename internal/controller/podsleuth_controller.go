@@ -19,6 +19,7 @@ package controller
 import (
 	"context"
 	"fmt"
+	"strings"
 	"sync"
 	"time"
 
@@ -58,6 +59,8 @@ type PodSleuthReconciler struct {
 	// Cache for log analysis results
 	analysisCache    map[string]*CachedAnalysisResult
 	analysisCacheMux sync.RWMutex
+
+	OperatorStartTime time.Time
 }
 
 // +kubebuilder:rbac:groups=apps.ops.dev,resources=podsleuths,verbs=get;list;watch;create;update;patch;delete
@@ -81,6 +84,20 @@ func (r *PodSleuthReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 	if err := r.Get(ctx, req.NamespacedName, &podSleuth); err != nil {
 		logger.Error(err, "unable to fetch PodSleuth")
 		return ctrl.Result{}, client.IgnoreNotFound(err)
+	}
+
+	// Check for force-refresh annotations
+	globalForceRefresh := false
+	targetForcePod := ""
+	if podSleuth.Annotations != nil {
+		if _, exists := podSleuth.Annotations["kubesleuth.io/force-refresh"]; exists {
+			globalForceRefresh = true
+			logger.Info("force-refresh annotation detected - bypassing cache for all pods")
+		}
+		if v, exists := podSleuth.Annotations["kubesleuth.io/force-refresh-pod"]; exists {
+			targetForcePod = strings.TrimSpace(v)
+			logger.Info("force-refresh annotation detected for specific pod", "pod", targetForcePod)
+		}
 	}
 
 	// List all pods across all namespaces
@@ -140,9 +157,10 @@ func (r *PodSleuthReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 			PodConditions:   conditions,
 		}
 
-		// Perform log analysis if enabled and pod is running but not ready
+		// Perform log analysis if enabled and pod is not ready
 		if podSleuth.Spec.LogAnalysis != nil && podSleuth.Spec.LogAnalysis.Enabled {
-			if pod.Status.Phase == corev1.PodRunning {
+			// Run analysis for any non-ready pod except Succeeded (which is already finished)
+			if pod.Status.Phase != corev1.PodSucceeded {
 				// Get cache configuration
 				cacheTTL := 5 * time.Minute // default
 				if podSleuth.Spec.LogAnalysis.CacheTTL != nil {
@@ -156,27 +174,50 @@ func (r *PodSleuthReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 
 				var logAnalysisResult *infrav1alpha1.LogAnalysisResult
 
-				// Try to get cached result if caching is enabled
-				if cacheEnabled {
+				// Use global or pod-specific force refresh flag
+				podKey := fmt.Sprintf("%s/%s", pod.Namespace, pod.Name)
+				forceRefresh := globalForceRefresh || (targetForcePod != "" && targetForcePod == podKey)
+				if targetForcePod != "" {
+					logger.Info("checking force refresh for pod", "currentPod", podKey, "targetPod", targetForcePod, "match", targetForcePod == podKey, "forceRefresh", forceRefresh)
+				}
+
+				// Try to get cached result if caching is enabled (but skip cache on first reconcile or force refresh)
+				if cacheEnabled && !forceRefresh {
 					logAnalysisResult = r.getCachedAnalysis(&pod, cacheTTL)
 					if logAnalysisResult != nil {
-						logger.Info("using cached log analysis", "pod", pod.Name, "namespace", pod.Namespace, "cachedAt", logAnalysisResult.CachedAt, "methods", logAnalysisResult.Methods)
+						logger.Info("using cached log analysis", "pod", pod.Name, "namespace", pod.Namespace, "cachedAt", logAnalysisResult.CachedAt)
 					}
 				}
 
-				// If no cached result, perform analysis
 				if logAnalysisResult == nil {
+					if forceRefresh {
+						logger.Info("force refresh requested - running log analysis immediately", "pod", pod.Name, "namespace", pod.Namespace)
+						// Ensure at least 1 second passes to guarantee a new timestamp for the dashboard to detect
+						time.Sleep(1100 * time.Millisecond)
+					}
+
 					result, err := analyzeLogs(ctx, r.Client, r.K8sClient, &pod, podSleuth.Spec.LogAnalysis)
 					if err != nil {
 						logger.Info("log analysis failed", "pod", pod.Name, "namespace", pod.Namespace, "error", err)
-					} else if result != nil {
+						// Create failure result so the dashboard polling detects completion
+						result = &infrav1alpha1.LogAnalysisResult{
+							RootCause:  fmt.Sprintf("Analysis Failed: %v", err),
+							Methods:    []string{"failed"},
+							AnalyzedAt: metav1.Now(),
+							Confidence: 0,
+						}
+					}
+
+					if result != nil {
+
+						logger.Info("log analysis successful", "pod", pod.Name, "newAnalyzedAt", result.AnalyzedAt, "timestamp", result.AnalyzedAt.Time.Unix())
 						logAnalysisResult = result
 						// Cache the result if caching is enabled
 						if cacheEnabled {
 							r.setCachedAnalysis(&pod, result, cacheTTL)
-							logger.Info("log analysis completed and cached", "pod", pod.Name, "namespace", pod.Namespace, "methods", result.Methods, "rootCause", result.RootCause, "confidence", result.Confidence, "cacheTTL", cacheTTL)
+							logger.Info("log analysis completed and cached", "pod", pod.Name, "namespace", pod.Namespace)
 						} else {
-							logger.Info("log analysis completed (no cache)", "pod", pod.Name, "namespace", pod.Namespace, "methods", result.Methods, "rootCause", result.RootCause, "confidence", result.Confidence)
+							logger.Info("log analysis completed (no cache)", "pod", pod.Name, "namespace", pod.Namespace)
 						}
 					}
 				}
@@ -184,6 +225,7 @@ func (r *PodSleuthReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 				// Use the analysis result (cached or fresh)
 				if logAnalysisResult != nil {
 					podInfo.LogAnalysis = logAnalysisResult
+
 					// Append log analysis findings to the message
 					if logAnalysisResult.RootCause != "" {
 						if podInfo.Message != "" {
@@ -227,6 +269,32 @@ func (r *PodSleuthReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 	if err := r.Status().Update(ctx, &podSleuth); err != nil {
 		logger.Error(err, "unable to update PodSleuth status")
 		return ctrl.Result{}, err
+	}
+
+	// If force refresh was active and status update succeeded, remove the annotations
+	if globalForceRefresh || targetForcePod != "" {
+		// Fetch latest version to avoid conflict
+		if err := r.Get(ctx, req.NamespacedName, &podSleuth); err == nil {
+			changed := false
+			if podSleuth.Annotations != nil {
+				if _, exists := podSleuth.Annotations["kubesleuth.io/force-refresh"]; exists {
+					delete(podSleuth.Annotations, "kubesleuth.io/force-refresh")
+					changed = true
+				}
+				if _, exists := podSleuth.Annotations["kubesleuth.io/force-refresh-pod"]; exists {
+					delete(podSleuth.Annotations, "kubesleuth.io/force-refresh-pod")
+					changed = true
+				}
+			}
+
+			if changed {
+				if err := r.Update(ctx, &podSleuth); err != nil {
+					logger.Error(err, "failed to remove force-refresh annotation(s) after analysis")
+				} else {
+					logger.Info("cleared force-refresh annotations after successful analysis")
+				}
+			}
+		}
 	}
 
 	// Determine reconcile interval
@@ -527,9 +595,12 @@ func (r *PodSleuthReconciler) setCachedAnalysis(pod *corev1.Pod, result *infrav1
 
 	cacheKey := getCacheKey(pod)
 	now := time.Now()
+	expiresAt := now.Add(cacheTTL)
 
-	// Set CachedAt timestamp in the result
+	// Set CachedAt and CacheExpiresAt timestamps in the result
 	result.CachedAt = metav1.NewTime(now)
+	cacheExpiresAtTime := metav1.NewTime(expiresAt)
+	result.CacheExpiresAt = &cacheExpiresAtTime
 
 	r.analysisCache[cacheKey] = &CachedAnalysisResult{
 		PodUID:       pod.UID,
@@ -538,7 +609,7 @@ func (r *PodSleuthReconciler) setCachedAnalysis(pod *corev1.Pod, result *infrav1
 		RestartCount: maxRestartCount,
 		Result:       result,
 		CachedAt:     now,
-		ExpiresAt:    now.Add(cacheTTL),
+		ExpiresAt:    expiresAt,
 	}
 }
 

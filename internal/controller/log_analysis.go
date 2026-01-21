@@ -120,13 +120,21 @@ func analyzeLogs(ctx context.Context, client client.Client, k8sClient kubernetes
 		return nil, nil
 	}
 
-	// Determine methods to use (backward compatibility)
-	methods := config.Methods
-	if len(methods) == 0 && config.Method != "" {
-		// Support deprecated single Method field
+	// Determine methods to use (with backward compatibility)
+	var methods []string
+
+	// Priority 1: Use new methodConfigs structure
+	if len(config.MethodConfigs) > 0 {
+		for _, mc := range config.MethodConfigs {
+			methods = append(methods, mc.Type)
+		}
+	} else if len(config.Methods) > 0 {
+		// Priority 2: Use deprecated Methods array
+		methods = config.Methods
+	} else if config.Method != "" {
+		// Priority 3: Support deprecated single Method field
 		methods = []string{config.Method}
-	}
-	if len(methods) == 0 {
+	} else {
 		// Default to pattern method
 		methods = []string{"pattern"}
 	}
@@ -152,9 +160,24 @@ func analyzeLogs(ctx context.Context, client client.Client, k8sClient kubernetes
 	for i, method := range methods {
 		logger.Info("running analysis method", "method", method, "order", i+1, "total", len(methods))
 
+		// Get method-specific config
+		var methodConfig *infrav1alpha1.MethodConfig
+		if len(config.MethodConfigs) > i {
+			methodConfig = &config.MethodConfigs[i]
+		}
+
 		switch method {
 		case "pattern":
-			result, err := analyzeWithPatterns(logLines, config)
+			// Get pattern-specific config (new structure or fallback to deprecated)
+			var patterns []infrav1alpha1.ErrorPattern
+			if methodConfig != nil && methodConfig.PatternConfig != nil {
+				patterns = methodConfig.PatternConfig.Patterns
+			} else if len(config.Patterns) > 0 {
+				// Fallback to deprecated Patterns field
+				patterns = config.Patterns
+			}
+
+			result, err := analyzeWithPatterns(logLines, patterns)
 			if err != nil {
 				logger.Error(err, "pattern analysis failed")
 				// Store error in result for UI display
@@ -174,7 +197,13 @@ func analyzeLogs(ctx context.Context, client client.Client, k8sClient kubernetes
 			}
 
 		case "ai":
-			result, err := analyzeWithAI(ctx, client, logLines, pod, config)
+			// Get AI-specific config (new structure or fallback to deprecated)
+			var aiConfig *infrav1alpha1.AIConfig
+			if methodConfig != nil && methodConfig.AIConfig != nil {
+				aiConfig = methodConfig.AIConfig
+			}
+
+			result, err := analyzeWithAI(ctx, client, logLines, pod, config, aiConfig)
 			if err != nil {
 				logger.Error(err, "AI analysis failed")
 				// Store error in result for UI display
@@ -378,14 +407,14 @@ func filterErrorLines(lines []string) []string {
 }
 
 // analyzeWithPatterns analyzes logs using pattern matching
-func analyzeWithPatterns(logLines []string, config *infrav1alpha1.LogAnalysisConfig) (*infrav1alpha1.LogAnalysisResult, error) {
+func analyzeWithPatterns(logLines []string, customPatterns []infrav1alpha1.ErrorPattern) (*infrav1alpha1.LogAnalysisResult, error) {
 	var patterns []PatternMatch
 
 	// Use custom patterns if provided, otherwise use defaults
 	logger := log.Log.WithName("log-analysis")
-	if len(config.Patterns) > 0 {
-		logger.Info("using custom patterns", "count", len(config.Patterns))
-		for _, customPattern := range config.Patterns {
+	if len(customPatterns) > 0 {
+		logger.Info("using custom patterns", "count", len(customPatterns))
+		for _, customPattern := range customPatterns {
 			regex, err := regexp.Compile(customPattern.Pattern)
 			if err != nil {
 				logger.Info("failed to compile pattern", "name", customPattern.Name, "pattern", customPattern.Pattern, "error", err)
@@ -539,29 +568,55 @@ func getAPIKeyFromSecret(ctx context.Context, k8sClient client.Client, secretRef
 }
 
 // analyzeWithAI analyzes logs using AI endpoint
-func analyzeWithAI(ctx context.Context, k8sClient client.Client, logLines []string, pod *corev1.Pod, config *infrav1alpha1.LogAnalysisConfig) (*infrav1alpha1.LogAnalysisResult, error) {
-	if config.AIEndpoint == "" {
-		return nil, fmt.Errorf("aiEndpoint is required for AI analysis")
+func analyzeWithAI(ctx context.Context, k8sClient client.Client, logLines []string, pod *corev1.Pod, config *infrav1alpha1.LogAnalysisConfig, aiConfig *infrav1alpha1.AIConfig) (*infrav1alpha1.LogAnalysisResult, error) {
+	// Get AI configuration (prefer new aiConfig parameter, fallback to deprecated fields)
+	var endpoint, format, model, authHeader, authPrefix string
+	var apiKeySecretRef *corev1.SecretKeySelector
+	var timeout time.Duration = 60 * time.Second // Default timeout
+
+	if aiConfig != nil {
+		// Use new AIConfig structure
+		endpoint = aiConfig.Endpoint
+		format = aiConfig.Format
+		model = aiConfig.Model
+		apiKeySecretRef = aiConfig.APIKeySecretRef
+		authHeader = aiConfig.AuthHeader
+		authPrefix = aiConfig.AuthPrefix
+		if aiConfig.Timeout != nil {
+			timeout = aiConfig.Timeout.Duration
+		}
+	} else {
+		// Fallback to deprecated fields
+		endpoint = config.AIEndpoint
+		format = config.AIFormat
+		model = config.AIModel
+		apiKeySecretRef = config.AIAPIKey
+		authHeader = config.AIAuthHeader
+		authPrefix = config.AIAuthPrefix
+	}
+
+	if endpoint == "" {
+		return nil, fmt.Errorf("AI endpoint is required for AI analysis")
 	}
 
 	// Get API key if configured
 	var apiKey string
 	var err error
-	if config.AIAPIKey != nil {
-		apiKey, err = getAPIKeyFromSecret(ctx, k8sClient, config.AIAPIKey, pod.Namespace)
+	if apiKeySecretRef != nil {
+		apiKey, err = getAPIKeyFromSecret(ctx, k8sClient, apiKeySecretRef, pod.Namespace)
 		if err != nil {
 			return nil, fmt.Errorf("failed to get API key: %w", err)
 		}
 	}
 
 	// Determine request format based on endpoint and format setting
-	requestBody, err := buildAIRequest(config, logLines, pod)
+	requestBody, err := buildAIRequest(endpoint, format, model, logLines, pod)
 	if err != nil {
 		return nil, fmt.Errorf("failed to build AI request: %w", err)
 	}
 
 	// Create HTTP request
-	req, err := http.NewRequestWithContext(ctx, "POST", config.AIEndpoint, bytes.NewBuffer(requestBody))
+	req, err := http.NewRequestWithContext(ctx, "POST", endpoint, bytes.NewBuffer(requestBody))
 	if err != nil {
 		return nil, fmt.Errorf("failed to create HTTP request: %w", err)
 	}
@@ -570,12 +625,10 @@ func analyzeWithAI(ctx context.Context, k8sClient client.Client, logLines []stri
 
 	// Add authentication header if API key is provided
 	if apiKey != "" {
-		authHeader := config.AIAuthHeader
 		if authHeader == "" {
 			authHeader = "Authorization"
 		}
 
-		authPrefix := config.AIAuthPrefix
 		if authPrefix == "" {
 			authPrefix = "Bearer"
 		}
@@ -590,7 +643,7 @@ func analyzeWithAI(ctx context.Context, k8sClient client.Client, logLines []stri
 
 	// Make HTTP request with timeout
 	httpClient := &http.Client{
-		Timeout: 30 * time.Second,
+		Timeout: timeout,
 	}
 
 	resp, err := httpClient.Do(req)
@@ -605,7 +658,7 @@ func analyzeWithAI(ctx context.Context, k8sClient client.Client, logLines []stri
 	}
 
 	// Parse response
-	result, err := parseAIResponse(resp.Body, config.AIEndpoint, config.AIFormat)
+	result, err := parseAIResponse(resp.Body, endpoint, format)
 	if err != nil {
 		return nil, fmt.Errorf("failed to parse AI response: %w", err)
 	}
@@ -617,7 +670,7 @@ func analyzeWithAI(ctx context.Context, k8sClient client.Client, logLines []stri
 }
 
 // buildAIRequest builds the request body based on endpoint type and format setting
-func buildAIRequest(config *infrav1alpha1.LogAnalysisConfig, logLines []string, pod *corev1.Pod) ([]byte, error) {
+func buildAIRequest(endpoint, format, model string, logLines []string, pod *corev1.Pod) ([]byte, error) {
 	logsText := strings.Join(logLines, "\n")
 	prompt := fmt.Sprintf(`Analyze these Kubernetes pod logs and identify the root cause why the pod is not ready.
 
@@ -632,14 +685,14 @@ Provide a concise root cause analysis. Focus on the primary issue.`, pod.Namespa
 	var requestBody map[string]interface{}
 
 	// Determine format: use explicit format if set, otherwise auto-detect from endpoint
-	apiFormat := config.AIFormat
+	apiFormat := format
 	if apiFormat == "" {
 		// Auto-detect based on endpoint URL
-		if strings.Contains(config.AIEndpoint, "openai.com") {
+		if strings.Contains(endpoint, "openai.com") {
 			apiFormat = "openai"
-		} else if strings.Contains(config.AIEndpoint, "anthropic.com") {
+		} else if strings.Contains(endpoint, "anthropic.com") {
 			apiFormat = "anthropic"
-		} else if strings.Contains(config.AIEndpoint, "ollama") || strings.Contains(config.AIEndpoint, ":11434") {
+		} else if strings.Contains(endpoint, "ollama") || strings.Contains(endpoint, ":11434") {
 			apiFormat = "ollama"
 		} else {
 			// Default to OpenAI format for unknown endpoints (most compatible)
@@ -648,18 +701,18 @@ Provide a concise root cause analysis. Focus on the primary issue.`, pod.Namespa
 	}
 
 	// Determine model: use explicit model if set, otherwise use defaults
-	model := config.AIModel
-	if model == "" {
+	modelName := model
+	if modelName == "" {
 		// Use defaults based on format
 		switch apiFormat {
 		case "openai":
-			model = "gpt-3.5-turbo"
+			modelName = "gpt-3.5-turbo"
 		case "anthropic":
-			model = "claude-3-haiku-20240307"
+			modelName = "claude-3-haiku-20240307"
 		case "ollama":
-			model = "llama2"
+			modelName = "llama2"
 		default:
-			model = "" // Generic format doesn't require model
+			modelName = "" // Generic format doesn't require model
 		}
 	}
 
@@ -668,7 +721,7 @@ Provide a concise root cause analysis. Focus on the primary issue.`, pod.Namespa
 	case "openai":
 		// OpenAI format (also works for OpenAI-compatible services like Together AI, Groq, LocalAI, vLLM, etc.)
 		requestBody = map[string]interface{}{
-			"model": model,
+			"model": modelName,
 			"messages": []map[string]string{
 				{
 					"role":    "system",
@@ -685,7 +738,7 @@ Provide a concise root cause analysis. Focus on the primary issue.`, pod.Namespa
 	case "anthropic":
 		// Anthropic format
 		requestBody = map[string]interface{}{
-			"model":      model,
+			"model":      modelName,
 			"max_tokens": 200,
 			"messages": []map[string]string{
 				{
@@ -697,7 +750,7 @@ Provide a concise root cause analysis. Focus on the primary issue.`, pod.Namespa
 	case "ollama":
 		// Ollama format
 		requestBody = map[string]interface{}{
-			"model":  model,
+			"model":  modelName,
 			"prompt": prompt,
 			"stream": false,
 		}
@@ -707,8 +760,8 @@ Provide a concise root cause analysis. Focus on the primary issue.`, pod.Namespa
 			"prompt":     prompt,
 			"max_tokens": 200,
 		}
-		if model != "" {
-			requestBody["model"] = model
+		if modelName != "" {
+			requestBody["model"] = modelName
 		}
 	}
 

@@ -209,6 +209,11 @@ spec:
                                 Model specifies the model name to use
                                 Examples: "gpt-4", "qwen3:8b", "claude-3-opus"
                               type: string
+                            timeout:
+                              description: |-
+                                Timeout specifies the timeout for the AI request
+                                Default: 60s
+                              type: string
                           required:
                           - endpoint
                           type: object
@@ -512,6 +517,11 @@ spec:
                           type: object
                         analyzedAt:
                           description: AnalyzedAt is when the analysis was performed
+                          format: date-time
+                          type: string
+                        cacheExpiresAt:
+                          description: CacheExpiresAt is when the cached result will
+                            expire (if caching is enabled)
                           format: date-time
                           type: string
                         cachedAt:

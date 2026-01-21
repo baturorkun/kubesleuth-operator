@@ -21,6 +21,9 @@ const dashboardHTML = `<!DOCTYPE html>
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
+    <meta http-equiv="Pragma" content="no-cache">
+    <meta http-equiv="Expires" content="0">
     <title>KubeSleuth Dashboard</title>
     <style>
         * {
@@ -323,7 +326,8 @@ const dashboardHTML = `<!DOCTYPE html>
         </div>
         <div class="last-update">
             <span id="lastUpdate"></span>
-            <span id="refreshStatus" class="refresh-status" style="display: none;">Auto-refresh paused</span>
+            <span id="lastUpdate"></span>
+        </div>
         </div>
     </div>
 
@@ -331,9 +335,15 @@ const dashboardHTML = `<!DOCTYPE html>
         let allPods = [];
         let filteredPods = [];
         let expandedRows = new Set(); // Track which rows are expanded
-        let autoRefreshIntervalId = null; // Store interval ID for auto-refresh
+        let lastExpandedPodKey = localStorage.getItem('lastExpandedPod') || '';
 
-        async function loadData() {
+        function getPodKey(pod) {
+            return pod.namespace + '/' + pod.name;
+        }
+
+        async function loadData(retryCount = 0) {
+            const maxRetries = 5;
+            const retryDelay = 2000; // 2 seconds
             const refreshBtn = document.getElementById('refreshBtn');
             const loading = document.getElementById('loading');
             const errorDiv = document.getElementById('error');
@@ -343,13 +353,16 @@ const dashboardHTML = `<!DOCTYPE html>
             refreshBtn.disabled = true;
             loading.style.display = 'block';
             errorDiv.style.display = 'none';
-            tableContainer.style.display = 'none';
-            emptyState.style.display = 'none';
+            // Don't hide table if we are just retrying to avoid flicker
+            if (retryCount === 0) {
+                tableContainer.style.display = 'none';
+                emptyState.style.display = 'none';
+            }
 
             try {
                 const response = await fetch('/api/podsleuths');
                 if (!response.ok) {
-                    throw new Error('Failed to fetch data');
+                    throw new Error("Server returned " + response.status + ": " + response.statusText);
                 }
                 const data = await response.json();
                 
@@ -366,6 +379,9 @@ const dashboardHTML = `<!DOCTYPE html>
                     allPods = data;
                 }
 
+                // Sort pods by name alphabetically
+                allPods.sort((a, b) => a.name.localeCompare(b.name));
+
                 updateStats();
                 updateNamespaceFilter();
                 filterTable();
@@ -374,15 +390,27 @@ const dashboardHTML = `<!DOCTYPE html>
                 loading.style.display = 'none';
                 if (filteredPods.length === 0) {
                     emptyState.style.display = 'block';
+                    tableContainer.style.display = 'none';
                 } else {
                     tableContainer.style.display = 'block';
+                    emptyState.style.display = 'none';
                 }
             } catch (error) {
-                loading.style.display = 'none';
-                errorDiv.style.display = 'block';
-                errorDiv.textContent = 'Error loading data: ' + error.message;
+                console.error("Attempt " + (retryCount + 1) + " failed:", error);
+                
+                if (retryCount < maxRetries) {
+                    loading.textContent = "Backend warming up... (Retry " + (retryCount + 1) + "/" + maxRetries + ")";
+                    setTimeout(() => loadData(retryCount + 1), retryDelay);
+                } else {
+                    loading.style.display = 'none';
+                    loading.textContent = 'Loading...';
+                    errorDiv.style.display = 'block';
+                    errorDiv.textContent = 'Error loading data: ' + error.message + '. Please ensure the operator is running and try refreshing again.';
+                }
             } finally {
-                refreshBtn.disabled = false;
+                if (retryCount >= maxRetries || loading.style.display === 'none') {
+                    refreshBtn.disabled = false;
+                }
             }
         }
 
@@ -437,6 +465,7 @@ const dashboardHTML = `<!DOCTYPE html>
         function renderTable() {
             // Save currently expanded rows before re-rendering
             const currentlyExpanded = new Set(expandedRows);
+            let autoExpandIndex = null;
             
             const tbody = document.getElementById('podsTableBody');
             tbody.innerHTML = '';
@@ -445,6 +474,10 @@ const dashboardHTML = `<!DOCTYPE html>
                 const hasDetails = (pod.containerErrors && pod.containerErrors.length > 0) || 
                                   (pod.podConditions && pod.podConditions.length > 0) ||
                                   (pod.logAnalysis && pod.logAnalysis.rootCause);
+                const podKey = getPodKey(pod);
+                if (lastExpandedPodKey && lastExpandedPodKey === podKey) {
+                    autoExpandIndex = index;
+                }
                 
                 // Always show expand icon if log analysis is present (it's important)
                 const hasLogAnalysis = pod.logAnalysis && pod.logAnalysis.rootCause;
@@ -613,48 +646,60 @@ const dashboardHTML = `<!DOCTYPE html>
                     icon.textContent = '▼';
                 }
             });
+
+            // Auto-expand saved pod after reload/refresh
+            if (autoExpandIndex !== null) {
+                const detailsRow = document.getElementById('details-' + autoExpandIndex);
+                const icon = document.getElementById('expand-icon-' + autoExpandIndex);
+                if (detailsRow && icon) {
+                    detailsRow.classList.add('expanded');
+                    icon.textContent = '▼';
+                    expandedRows.add(autoExpandIndex);
+                    setTimeout(() => {
+                        detailsRow.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                    }, 300);
+                }
+            }
         }
 
         function toggleDetails(index) {
             const detailsRow = document.getElementById('details-' + index);
             const icon = document.getElementById('expand-icon-' + index);
+            const pod = filteredPods[index];
+            const podKey = pod ? getPodKey(pod) : '';
             
             if (detailsRow.classList.contains('expanded')) {
                 // Closing details
                 detailsRow.classList.remove('expanded');
                 icon.textContent = '▶';
                 expandedRows.delete(index);
-                
-                // If no more expanded rows, resume auto-refresh
-                if (expandedRows.size === 0) {
-                    resumeAutoRefresh();
+                if (podKey && lastExpandedPodKey === podKey) {
+                    lastExpandedPodKey = '';
+                    localStorage.removeItem('lastExpandedPod');
                 }
             } else {
-                // Opening details
+                // Opening details - FIRST COLLAPSE ALL OTHERS (Mutual Exclusion)
+                expandedRows.forEach(prevIndex => {
+                    if (prevIndex !== index) {
+                        const prevRow = document.getElementById('details-' + prevIndex);
+                        const prevIcon = document.getElementById('expand-icon-' + prevIndex);
+                        if (prevRow) prevRow.classList.remove('expanded');
+                        if (prevIcon) prevIcon.textContent = '▶';
+                    }
+                });
+                expandedRows.clear();
+
                 detailsRow.classList.add('expanded');
                 icon.textContent = '▼';
                 expandedRows.add(index);
-                
-                // Pause auto-refresh when any row is expanded
-                pauseAutoRefresh();
+                if (podKey) {
+                    lastExpandedPodKey = podKey;
+                    localStorage.setItem('lastExpandedPod', podKey);
+                }
             }
         }
 
-        function pauseAutoRefresh() {
-            if (autoRefreshIntervalId !== null) {
-                clearInterval(autoRefreshIntervalId);
-                autoRefreshIntervalId = null;
-                document.getElementById('refreshStatus').style.display = 'inline-block';
-            }
-        }
 
-        function resumeAutoRefresh() {
-            if (autoRefreshIntervalId === null) {
-                document.getElementById('refreshStatus').style.display = 'none';
-                // Start auto-refresh immediately and then every 10 seconds
-                autoRefreshIntervalId = setInterval(loadData, 10000);
-            }
-        }
 
         function renderDetails(pod) {
             let html = '<div class="details-content">';
@@ -719,13 +764,42 @@ const dashboardHTML = `<!DOCTYPE html>
                 
                 if (pod.logAnalysis.analyzedAt) {
                     const analyzedDate = new Date(pod.logAnalysis.analyzedAt);
-                    html += '<div class="container-error-detail" style="margin-bottom: 4px;"><strong>Analyzed At:</strong> ' + analyzedDate.toLocaleString() + '</div>';
+                    let cachedIcon = '';
+                    if (pod.logAnalysis.cachedAt || pod.logAnalysis.cacheExpiresAt) {
+                        cachedIcon = ' <span title="Result retrieved from cache" style="color: #28a745; font-weight: 600; font-size: 12px; margin-left: 8px;">Cached ✓</span>';
+                    }
+                    html += '<div class="container-error-detail" style="margin-bottom: 4px;"><strong>Analyzed At:</strong> ' + analyzedDate.toLocaleString() + cachedIcon + '</div>';
                 }
                 
-                if (pod.logAnalysis.cachedAt) {
-                    const cachedDate = new Date(pod.logAnalysis.cachedAt);
-                    html += '<div class="container-error-detail"><strong>Cached At:</strong> ' + cachedDate.toLocaleString() + ' <span style="color: #28a745; font-weight: 600;">✓ Cached</span></div>';
+                // Show cache expiration with countdown if available
+                if (pod.logAnalysis.cacheExpiresAt) {
+                    const expiresDate = new Date(pod.logAnalysis.cacheExpiresAt);
+                    const now = new Date();
+                    const timeRemaining = expiresDate - now;
+                    
+                    let timeRemainingText = '';
+                    if (timeRemaining > 0) {
+                        const minutes = Math.floor(timeRemaining / 60000);
+                        const seconds = Math.floor((timeRemaining % 60000) / 1000);
+                        timeRemainingText = ' <span style="color: #28a745;">(' + minutes + 'm ' + seconds + 's remaining)</span>';
+                    } else {
+                        timeRemainingText = ' <span style="color: #dc3545;">(Expired)</span>';
+                    }
+                    
+                    html += '<div class="container-error-detail"><strong>Cache Valid Until:</strong> ' + expiresDate.toLocaleString() + timeRemainingText + ' <span style="color: #28a745; font-weight: 600;">✓</span></div>';
+                } else {
+                    // Fallback: Show cached timestamp with note to upgrade
+                    if (pod.logAnalysis.cachedAt) {
+                        const cachedDate = new Date(pod.logAnalysis.cachedAt);
+                        html += '<div class="container-error-detail"><strong>Cached At:</strong> ' + cachedDate.toLocaleString() + ' <span style="color: #28a745; font-weight: 600;">✓</span></div>';
+                    }
                 }
+
+                // Add "Run Analysis Again" button
+                html += '<div style="margin-top: 12px;">';
+                html += '<button onclick="runAnalysisAgain(this)" data-pod-name="' + pod.name + '" data-pod-namespace="' + pod.namespace + '" class="refresh-btn" style="background: #17a2b8; font-size: 12px; padding: 6px 12px;">Run Analysis Again</button>';
+                html += '<span class="run-analysis-status" style="margin-left: 8px; font-size: 12px; color: #666;"></span>';
+                html += '</div>';
                 
                 html += '</div>';
                 
@@ -817,6 +891,118 @@ const dashboardHTML = `<!DOCTYPE html>
             return div.innerHTML;
         }
 
+        async function runAnalysisAgain(btn) {
+            const loadingText = 'Running Analysis...';
+            const originalText = btn.textContent;
+            const podName = btn.dataset.podName;
+            const podNamespace = btn.dataset.podNamespace;
+            const statusSpan = btn.parentElement.querySelector('.run-analysis-status');
+            
+            btn.disabled = true;
+            btn.textContent = loadingText;
+            if (statusSpan) { statusSpan.textContent = ''; statusSpan.style.color = '#666'; }
+            
+            // Blur the details content to indicate activity
+            const detailsContent = btn.closest('.details-content');
+            if (detailsContent) {
+                detailsContent.style.transition = 'filter 0.3s';
+                detailsContent.style.filter = 'blur(2px)';
+                detailsContent.style.pointerEvents = 'none';
+            }
+            
+            try {
+                // Call force-refresh API to bypass cache for a single pod
+                const response = await fetch('/api/force-refresh', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({ podName, podNamespace }),
+                });
+
+                if (!response.ok) {
+                    throw new Error('Failed to trigger analysis');
+                }
+
+                // Find initial state to compare against
+                const currentPod = allPods.find(p => p.name === podName && p.namespace === podNamespace);
+                const initialAnalyzedAt = currentPod && currentPod.logAnalysis ? currentPod.logAnalysis.analyzedAt : null;
+                
+                // Show waiting state
+                const startTime = Date.now();
+                const timeoutMs = 30000; // 30 seconds timeout
+                const pollInterval = 3000;
+                
+                const checkStatus = async () => {
+                    const elapsed = Date.now() - startTime;
+                    if (elapsed > timeoutMs) {
+                        console.warn('Analysis polling timed out, reloading anyway');
+                        window.location.reload();
+                        return;
+                    }
+
+                    try {
+                        const response = await fetch('/api/podsleuths?_t=' + Date.now());
+                        if (!response.ok) throw new Error('Network response was not ok');
+                        
+                        const data = await response.json();
+                        let foundPod = null;
+                        
+                        // Helper to find pod in the response structure
+                        if (data.items && Array.isArray(data.items)) {
+                            for (const ps of data.items) {
+                                if (ps.status && ps.status.nonReadyPods) {
+                                    const match = ps.status.nonReadyPods.find(p => p.name === podName && p.namespace === podNamespace);
+                                    if (match) {
+                                        foundPod = match;
+                                        break;
+                                    }
+                                }
+                            }
+                        } else if (Array.isArray(data)) {
+                            // Fallback if API changed
+                            foundPod = data.find(p => p.name === podName && p.namespace === podNamespace);
+                        }
+
+                        // Check if analyzedAt has changed
+                        if (foundPod && foundPod.logAnalysis) {
+                            const newAnalyzedAt = foundPod.logAnalysis.analyzedAt;
+                            // Check if we have a new timestamp (different from initial)
+                            // If initial was null, any non-null new timestamp is a change
+                            // If initial existed, we need a different timestamp
+                            if (newAnalyzedAt && newAnalyzedAt !== initialAnalyzedAt) {
+                                window.location.reload();
+                                return;
+                            }
+                        }
+                    } catch (e) {
+                        console.error("Polling error", e);
+                    }
+                    
+                    // Continue polling
+                    setTimeout(checkStatus, pollInterval);
+                };
+                
+                // Start polling
+                checkStatus();
+
+            } catch (error) {
+                console.error('Error running analysis:', error);
+                btn.style.background = '#dc3545';
+                btn.textContent = 'Failed';
+                if (statusSpan) {
+                    statusSpan.textContent = 'Error: ' + error.message;
+                    statusSpan.style.color = '#dc3545';
+                }
+                setTimeout(() => {
+                    btn.disabled = false;
+                    btn.textContent = originalText;
+                    btn.style.background = '#17a2b8';
+                    if (statusSpan) { statusSpan.textContent = ''; statusSpan.style.color = '#666'; }
+                }, 3000);
+            }
+        }
+
 
         function updateLastUpdate() {
             const now = new Date();
@@ -827,8 +1013,7 @@ const dashboardHTML = `<!DOCTYPE html>
         // Load data on page load
         loadData();
         
-        // Start auto-refresh every 10 seconds
-        autoRefreshIntervalId = setInterval(loadData, 10000);
+
     </script>
 </body>
 </html>

@@ -239,6 +239,11 @@ type AIConfig struct {
 	// Default: "Bearer"
 	// +optional
 	AuthPrefix string `json:"authPrefix,omitempty"`
+
+	// Timeout specifies the timeout for the AI request
+	// Default: 60s
+	// +optional
+	Timeout *metav1.Duration `json:"timeout,omitempty"`
 }
 
 // ErrorPattern defines a pattern to match error messages in logs
@@ -357,6 +362,10 @@ type LogAnalysisResult struct {
 	// CachedAt is when the result was cached (if caching is enabled)
 	// +optional
 	CachedAt metav1.Time `json:"cachedAt,omitempty"`
+
+	// CacheExpiresAt is when the cached result will expire (if caching is enabled)
+	// +optional
+	CacheExpiresAt *metav1.Time `json:"cacheExpiresAt,omitempty"`
 }
 
 // NonReadyPodInfo contains information about a non-ready pod
