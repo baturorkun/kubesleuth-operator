@@ -704,6 +704,11 @@ const dashboardHTML = `<!DOCTYPE html>
         function renderDetails(pod) {
             let html = '<div class="details-content">';
             
+            // Pod Name Header
+            html += '<h3 style="margin-top: 0; margin-bottom: 20px; color: #333; border-bottom: 2px solid #eee; padding-bottom: 10px; display: flex; align-items: center; gap: 10px;">';
+            html += '<span style="font-size: 24px;">📦</span> Pod: ' + escapeHtml(pod.name) + ' <small style="color: #666; font-weight: normal; font-size: 14px;">(' + escapeHtml(pod.namespace) + ')</small>';
+            html += '</h3>';
+            
             // Container Errors
             if (pod.containerErrors && pod.containerErrors.length > 0) {
                 html += '<div class="details-section">';
